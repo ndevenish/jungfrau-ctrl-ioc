@@ -1,102 +1,259 @@
+use anyhow::{Result, anyhow};
+use regex::Regex;
+use std::{
+    io::{self, Write},
+    net::ToSocketAddrs,
+    thread::{self, JoinHandle},
+    time::Duration,
+};
 use telnet::{Action, Event, Telnet, TelnetOption};
-use std::io::{self, Write};
+use tokio::{
+    runtime::Handle,
+    sync::{mpsc, oneshot},
+};
+use tokio_util::sync::CancellationToken;
 use tracing::debug;
 
-fn main() {
-    tracing_subscriber::fmt().with_max_level(tracing::Level::DEBUG).init();
-    let mut connection = Telnet::connect(("i24-jf9mb-ctrl", 23), 256).unwrap();
+struct AsyncTelnet {
+    thread: JoinHandle<Result<()>>,
+    cancel: CancellationToken,
+    data_rx: mpsc::Receiver<Vec<u8>>,
+    req_tx: mpsc::Sender<(oneshot::Sender<io::Result<usize>>, Vec<u8>)>,
+}
 
-    // Our initial burst of expectations
-    for (action, option) in [
-        (Action::Do, TelnetOption::SuppressGoAhead),
-        (Action::Will, TelnetOption::TTYPE),
-        (Action::Will, TelnetOption::NAWS),
-        (Action::Wont, TelnetOption::NewEnvironment),
-        (Action::Wont, TelnetOption::XDISPLOC),
-    ] {
-        debug!("CTRL: Sending {action:?} {option:?}");
-        connection.negotiate(&action, option).unwrap();
+impl AsyncTelnet {
+    fn connect(addr: impl ToSocketAddrs + Send + 'static + std::fmt::Debug) -> AsyncTelnet {
+        let (data_tx, data_rx) = mpsc::channel(16);
+        let (req_tx, req_rx) = mpsc::channel(16);
+        let cancel = CancellationToken::new();
+        let cancel_sub = cancel.clone();
+        debug!("Spawning new thread to talk to telnet");
+        // addr.to_socket_addrs().unwrap()
+        let thread =
+            thread::spawn(move || AsyncTelnetInternal::start(addr, cancel_sub, data_tx, req_rx));
+        debug!("Done spawning thread");
+        AsyncTelnet {
+            thread,
+            cancel,
+            data_rx,
+            req_tx,
+        }
     }
-    let data = loop {
-        let event = connection.read().expect("Read Error");
-        if !matches!(event, Event::Data(_)) {
-            debug!("CTRL: {event:?}");
-        }
+    async fn stop(self) {
+        self.cancel.cancel();
+        let _ = tokio::task::spawn_blocking(|| self.thread.join()).await;
+    }
+    async fn send(self, request: Vec<u8>) -> Result<()> {
+        let (tx, rx) = oneshot::channel();
+        self.req_tx.send((tx, request)).await?;
+        rx.await??;
+        Ok(())
+    }
+}
 
-        // let mut handled_echo = false;
-        match event {
-            Event::Negotiation(Action::Do, option) => match option {
-                TelnetOption::NAWS => {
-                    debug!("CTRL:   └ Sending NAWS");
-                    connection
-                        .subnegotiate(TelnetOption::NAWS, &[0x00, 0x78, 0x00, 0x28])
-                        .unwrap()
-                }
-                TelnetOption::Echo => {
-                    let response = Action::Wont;
-                    debug!("CTRL:   └ Responding {response:?}");
-                    connection.negotiate(&response, option).unwrap()
-                }
-                TelnetOption::TSPEED => {
-                    let response = Action::Will;
-                    debug!("CTRL:   └ Responding {response:?}");
-                    connection.negotiate(&response, option).unwrap()
-                },
-                TelnetOption::LFLOW => {
-                    let response = Action::Wont;
-                    debug!("CTRL:   └ Responding {response:?}");
-                    connection.negotiate(&response, option).unwrap()
-                },
-                _ => (),
-            },
-            Event::Negotiation(Action::Will, option) => {
-                let response = match option {
-                    TelnetOption::Echo => Action::Do,
-                    TelnetOption::Status => Action::Dont,
-                    _ => continue,
-                };
-
-                // let response = match option {
-                //     TelnetOption::SuppressGoAhead => Action::Do,
-                //     TelnetOption::Echo => Action::Do,
-                //     TelnetOption::TTYPE => Action::Do,
-                //     _ => Action::Dont,
-                // };
-                debug!("CTRL:   └ Responding {response:?}");
-                connection.negotiate(&response, option).unwrap()
-            }
-            // Event::Negotiation(Action::Wont)
-            Event::Subnegotiation(TelnetOption::TTYPE, data) if data.get(0) == Some(&1) => {
-                debug!("CTRL:   └ Responding TTYPE = xterm");
-                connection
-                    .subnegotiate(TelnetOption::TTYPE, "xterm".as_bytes())
-                    .unwrap();
-            }
-            Event::Subnegotiation(TelnetOption::TSPEED, data) if data.get(0) == Some(&1) => {
-                debug!("CTRL:   └ Responding TSPEED = 9600,9600");
-                connection
-                    .subnegotiate(TelnetOption::TSPEED, "38400,38400".as_bytes())
-                    .unwrap();
-            }
-            Event::Data(d) => {
-                // First data means we have finished the opening negotiations
-                break d.into_vec();
-            }
-            _ => continue,
-        }
-    };
-    print!("{}", String::from_utf8(data).unwrap());
-    // Now we are past negotiation
-    loop {
-        let event = connection.read().expect("Read Error");
-        let data = match event {
-            Event::Data(d) => d.into_vec(),
-            w => {
-                print!("CTRL: {w:?}");
-                continue;
-            }
+struct AsyncTelnetInternal {
+    cancel: CancellationToken,
+    data_tx: mpsc::Sender<Vec<u8>>,
+    req_rx: mpsc::Receiver<(oneshot::Sender<io::Result<usize>>, Vec<u8>)>,
+}
+impl AsyncTelnetInternal {
+    fn start(
+        addr: impl ToSocketAddrs + std::fmt::Debug,
+        cancel: CancellationToken,
+        data_tx: mpsc::Sender<Vec<u8>>,
+        req_rx: mpsc::Receiver<(oneshot::Sender<io::Result<usize>>, Vec<u8>)>,
+    ) -> Result<()> {
+        let mut internal = Self {
+            cancel: cancel.clone(),
+            data_tx,
+            req_rx,
         };
-        print!("{}", String::from_utf8(data).unwrap());
+        // Make a runtime to allow timeouts on the tokio channels
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .enable_time()
+            .build()
+            .unwrap();
+
+        // Run until cancelled or cannot communicate any longer
+        loop {
+            let _ = internal.run_one_connection(rt.handle(), &addr);
+
+            // Check to see if we should continue
+            if cancel.is_cancelled() || internal.data_tx.is_closed() || internal.req_rx.is_closed()
+            {
+                break;
+            }
+
+            debug!("Telnet client failed/disconnected. Reconnecting shortly...");
+            thread::sleep(Duration::from_secs(3));
+        }
+
+        Ok(())
+    }
+
+    /// Do connection negotiation to the point real data starts coming through
+    ///
+    /// Return the first packet of real data
+    fn negotiate_connection(connection: &mut Telnet) -> Result<Vec<u8>> {
+        // Our initial burst of expectations
+        for (action, option) in [
+            (Action::Do, TelnetOption::SuppressGoAhead),
+            (Action::Will, TelnetOption::TTYPE),
+            (Action::Will, TelnetOption::NAWS),
+            (Action::Wont, TelnetOption::NewEnvironment),
+            (Action::Wont, TelnetOption::XDISPLOC),
+        ] {
+            debug!("CTRL: Sending {action:?} {option:?}");
+            connection.negotiate(&action, option)?;
+        }
+        // Do the negotiation until we get the first data
+        loop {
+            let event = connection.read()?;
+            if !matches!(event, Event::Data(_)) {
+                debug!("CTRL: {event:?}");
+            }
+
+            match event {
+                Event::Negotiation(Action::Do, option) => match option {
+                    TelnetOption::NAWS => {
+                        debug!("CTRL:   └ Sending NAWS");
+                        connection.subnegotiate(TelnetOption::NAWS, &[0x00, 0x78, 0x00, 0x28])?;
+                    }
+                    TelnetOption::Echo => {
+                        let response = Action::Wont;
+                        debug!("CTRL:   └ Responding {response:?}");
+                        connection.negotiate(&response, option)?;
+                    }
+                    TelnetOption::TSPEED => {
+                        let response = Action::Will;
+                        debug!("CTRL:   └ Responding {response:?}");
+                        connection.negotiate(&response, option)?;
+                    }
+                    TelnetOption::LFLOW => {
+                        let response = Action::Wont;
+                        debug!("CTRL:   └ Responding {response:?}");
+                        connection.negotiate(&response, option)?;
+                    }
+                    _ => (),
+                },
+                Event::Negotiation(Action::Will, option) => {
+                    let response = match option {
+                        TelnetOption::Echo => Action::Do,
+                        TelnetOption::Status => Action::Dont,
+                        _ => continue,
+                    };
+                    debug!("CTRL:   └ Responding {response:?}");
+                    connection.negotiate(&response, option)?;
+                }
+                // Event::Negotiation(Action::Wont)
+                Event::Subnegotiation(TelnetOption::TTYPE, data) if data.get(0) == Some(&1) => {
+                    debug!("CTRL:   └ Responding TTYPE = xterm");
+                    connection.subnegotiate(TelnetOption::TTYPE, "xterm".as_bytes())?;
+                }
+                Event::Subnegotiation(TelnetOption::TSPEED, data) if data.get(0) == Some(&1) => {
+                    debug!("CTRL:   └ Responding TSPEED = 9600,9600");
+                    connection.subnegotiate(TelnetOption::TSPEED, "38400,38400".as_bytes())?;
+                }
+                Event::Data(d) => {
+                    debug!("Received first data, opening negotiation complete");
+                    // First data means we have finished the opening negotiations
+                    break Ok(d.into_vec());
+                }
+                _ => continue,
+            }
+        }
+    }
+
+    /// Do logging and passing of data to the user
+    fn handle_data(&mut self, data: Vec<u8>) -> Result<(), mpsc::error::SendError<Vec<u8>>> {
+        debug!(
+            "Receieved:\n{}",
+            String::from_utf8_lossy(&data)
+                .lines()
+                .map(|s| format!("> {s}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        );
+        self.data_tx.blocking_send(data)
+    }
+
+    fn run_one_connection(
+        &mut self,
+        handle: &Handle,
+        addr: impl ToSocketAddrs + std::fmt::Debug,
+    ) -> Result<()> {
+        let sa = addr
+            .to_socket_addrs()?
+            .next()
+            .ok_or(anyhow!("Could not decode address: {addr:?}"))?;
+        debug!("Trying {sa}...");
+        let mut connection = Telnet::connect(sa, 256)?;
+
+        debug!("Connected to {addr:?}");
+        self.handle_data(Self::negotiate_connection(&mut connection)?)?;
+
+        // Now we are past negotiation, start the main loop
+        while !self.cancel.is_cancelled() {
+            // Consume everything waiting until we get NoData from the API
+            loop {
+                let event = connection.read_nonblocking()?;
+                let data = match event {
+                    Event::NoData => {
+                        break;
+                    }
+                    Event::Data(d) => d.into_vec(),
+                    w => {
+                        debug!("CTRL: {w:?}");
+                        continue;
+                    }
+                };
+                self.handle_data(data)?;
+            }
+            // Now, check to see if we need to handle messages from tokio
+
+            if let Ok(data) = handle.block_on(async {
+                tokio::time::timeout(Duration::from_millis(100), self.req_rx.recv()).await
+            }) {
+                let Some((send, request)) = data else {
+                    debug!("Communication receiver dropped; terminating telnet connection");
+                    break;
+                };
+                send.send(connection.write(&request))
+                    .map_err(|_| anyhow!("Could not send data to internal process"))?;
+            }
+        }
+        debug!("Terminating single telnet connection");
+        Ok(())
+    }
+}
+
+enum Command {
+    SHT,
+}
+
+impl Command {}
+#[tokio::main(flavor = "current_thread")]
+async fn main() {
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .init();
+
+    let mut connection = AsyncTelnet::connect("i24-jf9mb-ctrl:23");
+
+    // let data_re = Regex::new(r"").unwrap();
+    // let mut command = None;
+    // let mut buffer = String::new();
+    loop {
+        let Some(data) = connection.data_rx.recv().await else {
+            break;
+        };
+        // Data could have come through incomplete or split.
+        // Add this new data to our existing buffer, so we can handle when ready.
+        // buffer.push_str(str::from_utf8(&data).unwrap());
+        print!("{}", String::from_utf8_lossy(&data));
+        // if message.contains("root:/>") {}
+
         io::stdout().flush().unwrap();
     }
+    connection.stop().await;
 }
