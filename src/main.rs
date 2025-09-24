@@ -1,6 +1,6 @@
 use anyhow::{Result, anyhow};
 
-use epicars::{Server, ServerBuilder, providers::IntercomProvider};
+use epicars::{ServerBuilder, providers::IntercomProvider};
 use futures_util::stream::StreamExt;
 use regex::bytes::Regex;
 use std::{
@@ -360,7 +360,12 @@ async fn main() {
     let pv_connected = library
         .add_pv("BL24I-JUNGFRAU:CTRL:CONNECTED", 0i8)
         .unwrap();
-
+    let pv_temperature = library
+        .add_pv("BL24I-JUNGFRAU:CTRL:TEMPERATURE", 20f32)
+        .unwrap();
+    let pv_humidity = library
+        .add_pv("BL24I-JUNGFRAU:CTRL:HUMIDITY", 0f32)
+        .unwrap();
     let connection = AsyncTelnet::connect("i24-jf9mb-ctrl:23");
     let mut statewatch = connection.get_state();
     let mut reader = FramedRead::new(connection, TelnetPromptDecoder {});
@@ -369,7 +374,7 @@ async fn main() {
     let _ = reader.next().await.unwrap().unwrap();
     debug!("Discarding initial frame");
 
-    let server = ServerBuilder::new(library).start().await.unwrap();
+    let _server = ServerBuilder::new(library).start().await.unwrap();
 
     // The last time we queried an update
     let mut last_requested_update = Instant::now() - Duration::from_secs(60);
@@ -385,6 +390,8 @@ async fn main() {
             },
             _ = tokio::time::sleep_until((last_requested_update + Duration::from_secs(10)).into()) => {
                 let (temperature, humidity) = query_sht33_values(&mut reader).await.unwrap();
+                pv_temperature.store(&temperature);
+                pv_humidity.store(&humidity);
                 println!("SHT33: Temperature: {temperature:-.2}°C   Humidity: {humidity:.1} %",);
                 last_requested_update = Instant::now();
             }
