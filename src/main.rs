@@ -152,7 +152,7 @@ impl AsyncTelnetInternal {
                 },
                 Event::Negotiation(Action::Will, option) => {
                     let response = match option {
-                        TelnetOption::Echo => Action::Do,
+                        TelnetOption::Echo => Action::Dont,
                         TelnetOption::Status => Action::Dont,
                         _ => continue,
                     };
@@ -261,7 +261,6 @@ impl AsyncRead for AsyncTelnet {
                 if data.is_empty() {
                     Poll::Pending
                 } else {
-                    println!("{} {}", data.len(), buf.remaining());
                     let to_copy = std::cmp::min(data.len(), buf.remaining());
                     buf.put_slice(&data[..to_copy]);
                     data.drain(0..to_copy);
@@ -288,7 +287,7 @@ impl Decoder for TelnetPromptDecoder {
         &mut self,
         src: &mut tokio_util::bytes::BytesMut,
     ) -> std::result::Result<Option<Self::Item>, Self::Error> {
-        let data_re = Regex::new(r"root:/> ").unwrap();
+        let data_re = Regex::new(r"(root)?:/> ").unwrap();
         let (start, end) = match data_re.find(&src) {
             Some(rematch) => (rematch.start(), rematch.end()),
             None => return Ok(None),
@@ -307,7 +306,7 @@ impl Command {}
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
+        .with_max_level(tracing::Level::TRACE)
         .init();
 
     let connection = AsyncTelnet::connect("i24-jf9mb-ctrl:23");
