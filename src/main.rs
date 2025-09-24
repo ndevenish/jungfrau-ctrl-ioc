@@ -3,7 +3,7 @@ use anyhow::{Result, anyhow};
 use futures_util::stream::StreamExt;
 use regex::bytes::Regex;
 use std::{
-    io::{self},
+    io::{self, BufRead},
     net::ToSocketAddrs,
     task::Poll,
     thread::{self, JoinHandle},
@@ -317,11 +317,31 @@ async fn main() {
     loop {
         reader
             .get_mut()
-            .send("/power_control/i2c_sht33/i2ctransfer -y 0 w2@0x44 0xe0 0x00 r6\n".as_bytes())
+            .send(
+                "/power_control/i2c_sht33/i2ctransfer -y 0 w2@0x44 0xe0 0x00 r6; echo $?\n"
+                    .as_bytes(),
+            )
             .await
             .unwrap();
-        let response = reader.next().await.unwrap().unwrap();
-        println!("Got response: {}", str::from_utf8(&response).unwrap());
+        let data = reader.next().await.unwrap().unwrap();
+        let response = str::from_utf8(&data).unwrap();
+        let lines: Vec<_> = response.lines().collect();
+        assert_eq!(lines.len(), 2);
+        let status: i32 = lines[1].parse().unwrap();
+        // Convert the data to ints
+        let data: Vec<u8> = lines[0]
+            .split_whitespace()
+            .map(|v| u8::from_str_radix(&v[2..], 16).unwrap())
+            .collect::<Vec<_>>();
+        let temperature = 21.875 * (u16::from_be_bytes([data[0], data[1]]) as f32) / 8192.0 - 45.0;
+        let humidity = 12.5 * (u16::from_be_bytes([data[3], data[4]]) as f32) / 8192.0;
+
+        // TEMP=$((21875*TEMP/8192-45000))
+        // let temperature = 21.875 * (data[0] as f32) / 8192.0 - 45.0;
+        // let humidity = 12500.0 * (data[1] as f32) / 8192.0;
+        // HUM=$((12500*HUM/8192))
+        println!("Got data: {data:?} Temperature: {temperature} °C   Humidity: {humidity} %",);
+        // println!("Got response: {}", str::from_utf8(&response).unwrap());
         tokio::time::sleep(Duration::from_secs(5)).await;
     }
 
