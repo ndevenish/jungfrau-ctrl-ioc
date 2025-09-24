@@ -3,7 +3,7 @@ use anyhow::{Result, anyhow};
 use futures_util::stream::StreamExt;
 use regex::bytes::Regex;
 use std::{
-    io::{self, BufRead},
+    io::{self},
     net::ToSocketAddrs,
     task::Poll,
     thread::{self, JoinHandle},
@@ -48,6 +48,8 @@ impl AsyncTelnet {
             buffer: Vec::new(),
         }
     }
+
+    #[allow(dead_code)]
     async fn stop(self) {
         self.cancel.cancel();
         let _ = tokio::task::spawn_blocking(|| self.thread.join()).await;
@@ -160,11 +162,11 @@ impl AsyncTelnetInternal {
                     connection.negotiate(&response, option)?;
                 }
                 // Event::Negotiation(Action::Wont)
-                Event::Subnegotiation(TelnetOption::TTYPE, data) if data.get(0) == Some(&1) => {
+                Event::Subnegotiation(TelnetOption::TTYPE, data) if data.first() == Some(&1) => {
                     debug!("CTRL:   └ Responding TTYPE = xterm");
                     connection.subnegotiate(TelnetOption::TTYPE, "xterm".as_bytes())?;
                 }
-                Event::Subnegotiation(TelnetOption::TSPEED, data) if data.get(0) == Some(&1) => {
+                Event::Subnegotiation(TelnetOption::TSPEED, data) if data.first() == Some(&1) => {
                     debug!("CTRL:   └ Responding TSPEED = 9600,9600");
                     connection.subnegotiate(TelnetOption::TSPEED, "38400,38400".as_bytes())?;
                 }
@@ -288,7 +290,7 @@ impl Decoder for TelnetPromptDecoder {
         src: &mut tokio_util::bytes::BytesMut,
     ) -> std::result::Result<Option<Self::Item>, Self::Error> {
         let data_re = Regex::new(r"(root)?:/> ").unwrap();
-        let (start, end) = match data_re.find(&src) {
+        let (start, end) = match data_re.find(src) {
             Some(rematch) => (rematch.start(), rematch.end()),
             None => return Ok(None),
         };
@@ -298,52 +300,50 @@ impl Decoder for TelnetPromptDecoder {
     }
 }
 
-enum Command {
-    SHT,
+/// Do the I2C query for the SHT33 values
+async fn query_sht33_values(
+    reader: &mut FramedRead<AsyncTelnet, TelnetPromptDecoder>,
+) -> Result<(f32, f32)> {
+    reader
+        .get_ref()
+        .send(
+            "/power_control/i2c_sht33/i2ctransfer -y 0 w2@0x44 0xe0 0x00 r6; echo $?\n".as_bytes(),
+        )
+        .await
+        .unwrap();
+    let data = reader.next().await.unwrap().unwrap();
+    let response = str::from_utf8(&data).unwrap();
+    let lines: Vec<_> = response.lines().collect();
+    assert_eq!(lines.len(), 2);
+    let status: i32 = lines[1].parse().unwrap();
+    if status != 0 {
+        return Err(anyhow!("Got nonzero return status: {status}"));
+    }
+    // Convert the data to ints
+    let data: Vec<u8> = lines[0]
+        .split_whitespace()
+        .map(|v| u8::from_str_radix(&v[2..], 16).unwrap())
+        .collect::<Vec<_>>();
+    let temperature = 21.875 * (u16::from_be_bytes([data[0], data[1]]) as f32) / 8192.0 - 45.0;
+    let humidity = 12.5 * (u16::from_be_bytes([data[3], data[4]]) as f32) / 8192.0;
+    Ok((temperature, humidity))
 }
 
-impl Command {}
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::TRACE)
+        .with_max_level(tracing::Level::DEBUG)
         .init();
 
     let connection = AsyncTelnet::connect("i24-jf9mb-ctrl:23");
     let mut reader = FramedRead::new(connection, TelnetPromptDecoder {});
-    // let command = None;
+
     let _ = reader.next().await.unwrap().unwrap();
     debug!("Discarding initial frame");
     loop {
-        reader
-            .get_mut()
-            .send(
-                "/power_control/i2c_sht33/i2ctransfer -y 0 w2@0x44 0xe0 0x00 r6; echo $?\n"
-                    .as_bytes(),
-            )
-            .await
-            .unwrap();
-        let data = reader.next().await.unwrap().unwrap();
-        let response = str::from_utf8(&data).unwrap();
-        let lines: Vec<_> = response.lines().collect();
-        assert_eq!(lines.len(), 2);
-        let status: i32 = lines[1].parse().unwrap();
-        // Convert the data to ints
-        let data: Vec<u8> = lines[0]
-            .split_whitespace()
-            .map(|v| u8::from_str_radix(&v[2..], 16).unwrap())
-            .collect::<Vec<_>>();
-        let temperature = 21.875 * (u16::from_be_bytes([data[0], data[1]]) as f32) / 8192.0 - 45.0;
-        let humidity = 12.5 * (u16::from_be_bytes([data[3], data[4]]) as f32) / 8192.0;
-
-        // TEMP=$((21875*TEMP/8192-45000))
-        // let temperature = 21.875 * (data[0] as f32) / 8192.0 - 45.0;
-        // let humidity = 12500.0 * (data[1] as f32) / 8192.0;
-        // HUM=$((12500*HUM/8192))
-        println!("Got data: {data:?} Temperature: {temperature} °C   Humidity: {humidity} %",);
+        let (temperature, humidity) = query_sht33_values(&mut reader).await.unwrap();
+        println!("SHT33: Temperature: {temperature:-.2}°C   Humidity: {humidity:.1} %",);
         // println!("Got response: {}", str::from_utf8(&response).unwrap());
         tokio::time::sleep(Duration::from_secs(5)).await;
     }
-
-    reader.into_inner().stop().await;
 }
