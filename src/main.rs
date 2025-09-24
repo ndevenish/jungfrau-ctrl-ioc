@@ -358,7 +358,7 @@ async fn main() {
 
     let mut library = IntercomProvider::new();
     let pv_connected = library
-        .add_pv("BL24I-JUNGFRAU:CTRL:CONNEcTED", 0i8)
+        .add_pv("BL24I-JUNGFRAU:CTRL:CONNECTED", 0i8)
         .unwrap();
 
     let connection = AsyncTelnet::connect("i24-jf9mb-ctrl:23");
