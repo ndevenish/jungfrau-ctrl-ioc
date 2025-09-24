@@ -1,17 +1,24 @@
 use anyhow::{Result, anyhow};
-use regex::Regex;
+use futures_core::Stream;
+use futures_util::stream::StreamExt;
+use regex::bytes::Regex;
 use std::{
     io::{self, Write},
     net::ToSocketAddrs,
+    task::Poll,
     thread::{self, JoinHandle},
     time::Duration,
 };
 use telnet::{Action, Event, Telnet, TelnetOption};
 use tokio::{
+    io::AsyncRead,
     runtime::Handle,
     sync::{mpsc, oneshot},
 };
-use tokio_util::sync::CancellationToken;
+use tokio_util::{
+    codec::{Decoder, FramedRead},
+    sync::CancellationToken,
+};
 use tracing::debug;
 
 struct AsyncTelnet {
@@ -19,6 +26,7 @@ struct AsyncTelnet {
     cancel: CancellationToken,
     data_rx: mpsc::Receiver<Vec<u8>>,
     req_tx: mpsc::Sender<(oneshot::Sender<io::Result<usize>>, Vec<u8>)>,
+    buffer: Vec<u8>,
 }
 
 impl AsyncTelnet {
@@ -37,9 +45,10 @@ impl AsyncTelnet {
             cancel,
             data_rx,
             req_tx,
+            buffer: Vec::new(),
         }
     }
-    async fn stop(self) {
+    async fn stop(mut self) {
         self.cancel.cancel();
         let _ = tokio::task::spawn_blocking(|| self.thread.join()).await;
     }
@@ -51,6 +60,11 @@ impl AsyncTelnet {
     }
 }
 
+// impl Drop for AsyncTelnet {
+//     fn drop(&mut self) {
+//         self.stop();
+//     }
+// }
 struct AsyncTelnetInternal {
     cancel: CancellationToken,
     data_tx: mpsc::Sender<Vec<u8>>,
@@ -227,6 +241,64 @@ impl AsyncTelnetInternal {
     }
 }
 
+impl AsyncRead for AsyncTelnet {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<io::Result<()>> {
+        // If we have data in the buffer, just return that
+        if !self.buffer.is_empty() {
+            let to_copy = std::cmp::min(self.buffer.len(), buf.remaining());
+            buf.put_slice(&self.buffer[..to_copy]);
+            self.buffer.drain(0..to_copy);
+            return Poll::Ready(Ok(()));
+        }
+        assert!(self.buffer.is_empty());
+        // Get any new data
+        match self.data_rx.poll_recv(cx) {
+            Poll::Ready(Some(mut data)) => {
+                if data.is_empty() {
+                    Poll::Pending
+                } else {
+                    println!("{} {}", data.len(), buf.remaining());
+                    let to_copy = std::cmp::min(data.len(), buf.remaining());
+                    buf.put_slice(&data[..to_copy]);
+                    data.drain(0..to_copy);
+                    if !data.is_empty() {
+                        self.buffer = data;
+                    }
+                    Poll::Ready(Ok(()))
+                }
+            }
+            Poll::Ready(None) => Poll::Ready(Ok(())),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+struct TelnetPromptDecoder {}
+
+impl Decoder for TelnetPromptDecoder {
+    type Item = Vec<u8>;
+
+    type Error = anyhow::Error;
+
+    fn decode(
+        &mut self,
+        src: &mut tokio_util::bytes::BytesMut,
+    ) -> std::result::Result<Option<Self::Item>, Self::Error> {
+        let data_re = Regex::new(r"root:/> ").unwrap();
+        let (start, end) = match data_re.find(&src) {
+            Some(rematch) => (rematch.start(), rematch.end()),
+            None => return Ok(None),
+        };
+        let mut data_out = src.split_to(end);
+        data_out.truncate(start);
+        Ok(Some(data_out.to_vec()))
+    }
+}
+
 enum Command {
     SHT,
 }
@@ -240,20 +312,29 @@ async fn main() {
 
     let mut connection = AsyncTelnet::connect("i24-jf9mb-ctrl:23");
 
-    // let data_re = Regex::new(r"").unwrap();
-    // let mut command = None;
-    // let mut buffer = String::new();
-    loop {
-        let Some(data) = connection.data_rx.recv().await else {
-            break;
-        };
-        // Data could have come through incomplete or split.
-        // Add this new data to our existing buffer, so we can handle when ready.
-        // buffer.push_str(str::from_utf8(&data).unwrap());
-        print!("{}", String::from_utf8_lossy(&data));
-        // if message.contains("root:/>") {}
+    let mut reader = FramedRead::new(connection, TelnetPromptDecoder {});
 
-        io::stdout().flush().unwrap();
+    while let Some(frame) = reader.next().await {
+        println!("Frame: {}", str::from_utf8(&frame.unwrap()).unwrap());
     }
-    connection.stop().await;
+    // reader.
+    // Lifecycle state:
+    //     None => No command running, ready for command
+    //     Some(Command) => Emitted command, waiting for response
+    // let mut command = None;
+    // Buffer to hold incomplete data
+    // let mut buffer = String::new();
+    // loop {
+    //     let Some(data) = connection.data_rx.recv().await else {
+    //         break;
+    //     };
+    //     // Data could have come through incomplete or split.
+    //     // Add this new data to our existing buffer, so we can handle when ready.
+    //     buffer.push_str(str::from_utf8(&data).unwrap());
+
+    //     // if message.contains("root:/>") {}
+
+    //     io::stdout().flush().unwrap();
+    // }
+    // connection.stop().await;
 }
