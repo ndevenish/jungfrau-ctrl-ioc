@@ -15,61 +15,63 @@ use tokio::{
     io::AsyncRead,
     runtime::Handle,
     select,
-    sync::{mpsc, oneshot, watch},
+    sync::{mpsc, oneshot},
 };
 use tokio_util::{
     codec::{Decoder, FramedRead},
     sync::CancellationToken,
 };
-use tracing::{debug, trace};
-
-#[derive(Clone, Copy, Debug)]
-enum ConnectionState {
-    Disconnected,
-    Connected,
-}
+use tracing::{debug, trace, warn};
 
 struct AsyncTelnet {
-    state: watch::Receiver<ConnectionState>,
-    thread: JoinHandle<Result<()>>,
+    thread: Option<JoinHandle<()>>,
     cancel: CancellationToken,
     data_rx: mpsc::Receiver<Vec<u8>>,
     req_tx: mpsc::Sender<(oneshot::Sender<io::Result<usize>>, Vec<u8>)>,
     buffer: Vec<u8>,
+    /// Triggered on disconnection, so we know it has ended
+    disconnected: CancellationToken,
 }
 
 impl AsyncTelnet {
-    fn connect(addr: impl ToSocketAddrs + Send + 'static + std::fmt::Debug) -> AsyncTelnet {
+    async fn connect(
+        addr: impl ToSocketAddrs + Send + 'static + std::fmt::Debug,
+    ) -> Result<AsyncTelnet> {
         let (data_tx, data_rx) = mpsc::channel(16);
         let (req_tx, req_rx) = mpsc::channel(16);
         let cancel = CancellationToken::new();
         let cancel_sub = cancel.clone();
-        let (state_tx, state_rx) = watch::channel(ConnectionState::Disconnected);
+        let (conn_tx, conn_rx) = oneshot::channel();
+        let disconnected = CancellationToken::new();
         debug!("Spawning new thread to talk to telnet");
         // addr.to_socket_addrs().unwrap()
+        let dc = disconnected.clone();
         let thread = thread::spawn(move || {
-            AsyncTelnetInternal::start(addr, cancel_sub, data_tx, req_rx, state_tx)
+            AsyncTelnetInternal::start(addr, cancel_sub, data_tx, req_rx, conn_tx, dc)
         });
-        debug!("Done spawning thread");
-        AsyncTelnet {
-            state: state_rx,
-            thread,
+        // Wait for the connection to succeed or fail
+        let _ = conn_rx.await?;
+        Ok(AsyncTelnet {
+            thread: Some(thread),
             cancel,
             data_rx,
             req_tx,
             buffer: Vec::new(),
+            disconnected,
+        })
+    }
+
+    async fn disconnected(&self) {
+        self.disconnected.cancelled().await
+    }
+    #[allow(dead_code)]
+    async fn stop(&mut self) {
+        self.cancel.cancel();
+        if let Some(thread) = self.thread.take() {
+            let _ = tokio::task::spawn_blocking(|| thread.join()).await;
         }
     }
 
-    fn get_state(&self) -> watch::Receiver<ConnectionState> {
-        self.state.clone()
-    }
-
-    #[allow(dead_code)]
-    async fn stop(self) {
-        self.cancel.cancel();
-        let _ = tokio::task::spawn_blocking(|| self.thread.join()).await;
-    }
     async fn send(&self, request: &[u8]) -> Result<()> {
         let (tx, rx) = oneshot::channel();
         self.req_tx.send((tx, request.to_vec())).await?;
@@ -78,6 +80,13 @@ impl AsyncTelnet {
     }
 }
 
+impl Drop for AsyncTelnet {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+    }
+}
+
+/// Internal parts of AsyncTelnet, that synchronously manage the connection
 struct AsyncTelnetInternal {
     cancel: CancellationToken,
     data_tx: mpsc::Sender<Vec<u8>>,
@@ -89,44 +98,43 @@ impl AsyncTelnetInternal {
         cancel: CancellationToken,
         data_tx: mpsc::Sender<Vec<u8>>,
         req_rx: mpsc::Receiver<(oneshot::Sender<io::Result<usize>>, Vec<u8>)>,
-        state_tx: watch::Sender<ConnectionState>,
-    ) -> Result<()> {
+        conn_tx: oneshot::Sender<Result<()>>,
+        disconnected: CancellationToken,
+    ) {
         let mut internal = Self {
             cancel: cancel.clone(),
             data_tx,
             req_rx,
         };
+
+        let connection = match Self::connect(&addr) {
+            Ok(conn) => conn,
+            Err(e) => {
+                let _ = conn_tx.send(Err(e));
+                return;
+            }
+        };
+        let _ = conn_tx.send(Ok(()));
+
         // Make a runtime to allow timeouts on the tokio channels
         let rt = tokio::runtime::Builder::new_multi_thread()
             .enable_time()
             .build()
             .unwrap();
+        let _ = internal.run_one_connection(connection, rt.handle());
+        // Mark use as disconnected
+        disconnected.cancel();
+    }
 
-        // Run until cancelled or cannot communicate any longer
-        loop {
-            // If here, we either just started or got disconnected
-            state_tx.send_if_modified(|f| match f {
-                ConnectionState::Disconnected => false,
-                _ => {
-                    *f = ConnectionState::Disconnected;
-                    true
-                }
-            });
-            if let Ok(connection) = Self::connect(&addr) {
-                state_tx.send_modify(|f| *f = ConnectionState::Connected);
-                let _ = internal.run_one_connection(connection, rt.handle());
-                state_tx.send_modify(|f| *f = ConnectionState::Disconnected);
-            };
-            // Check to see if we should continue
-            if cancel.is_cancelled() || internal.data_tx.is_closed() || internal.req_rx.is_closed()
-            {
-                break;
-            }
-            debug!("Telnet client failed/disconnected. Reconnecting shortly...");
-            thread::sleep(Duration::from_secs(3));
-        }
-
-        Ok(())
+    fn connect(addr: impl ToSocketAddrs + std::fmt::Debug) -> Result<Telnet> {
+        let sa = addr
+            .to_socket_addrs()?
+            .next()
+            .ok_or(anyhow!("Could not decode address: {addr:?}"))?;
+        debug!("Trying {sa}...");
+        let connection = Telnet::connect(sa, 256)?;
+        debug!("Connected to {addr:?}");
+        Ok(connection)
     }
 
     /// Do connection negotiation to the point real data starts coming through
@@ -213,17 +221,6 @@ impl AsyncTelnetInternal {
                 .join("\n")
         );
         self.data_tx.blocking_send(data)
-    }
-
-    fn connect(addr: impl ToSocketAddrs + std::fmt::Debug) -> Result<Telnet> {
-        let sa = addr
-            .to_socket_addrs()?
-            .next()
-            .ok_or(anyhow!("Could not decode address: {addr:?}"))?;
-        debug!("Trying {sa}...");
-        let connection = Telnet::connect(sa, 256)?;
-        debug!("Connected to {addr:?}");
-        Ok(connection)
     }
 
     fn run_one_connection(&mut self, mut connection: Telnet, handle: &Handle) -> Result<()> {
@@ -366,38 +363,45 @@ async fn main() {
     let pv_humidity = library
         .add_pv("BL24I-JUNGFRAU:CTRL:HUMIDITY", 0f32)
         .unwrap();
-    let connection = AsyncTelnet::connect("i24-jf9mb-ctrl:23");
-    let mut statewatch = connection.get_state();
-    let mut reader = FramedRead::new(connection, TelnetPromptDecoder {});
+    let pv_switch = library.add_pv("BL24I-JUNGFRAU:CTRL:SWITCH", 0f32).unwrap();
+    let pv_switch = library.add_pv("BL24I-JUNGFRAU:CTRL:POWER", 0f32).unwrap();
 
-    // println!("State: {:?}", statewatch.borrow_and_update());
-    let _ = reader.next().await.unwrap().unwrap();
-    debug!("Discarding initial frame");
+    // Don't start the server until we have the first value
+    let mut server = None;
 
-    let _server = ServerBuilder::new(library).start().await.unwrap();
-
-    // The last time we queried an update
-    let mut last_requested_update = Instant::now() - Duration::from_secs(60);
     loop {
-        select! {
-            _ = statewatch.changed() => {
-                let state = *statewatch.borrow_and_update();
-                println!("Connection state: {:?}", statewatch.borrow_and_update());
-                match state {
-                    ConnectionState::Connected => pv_connected.store(&1i8),
-                    ConnectionState::Disconnected => pv_connected.store(&0i8),
-                };
-            },
-            _ = tokio::time::sleep_until((last_requested_update + Duration::from_secs(10)).into()) => {
-                let (temperature, humidity) = query_sht33_values(&mut reader).await.unwrap();
-                pv_temperature.store(&temperature);
-                pv_humidity.store(&humidity);
-                println!("SHT33: Temperature: {temperature:-.2}°C   Humidity: {humidity:.1} %",);
-                last_requested_update = Instant::now();
+        let connection = match AsyncTelnet::connect("i24-jf9mb-ctrl:23").await {
+            Ok(c) => c,
+            Err(e) => {
+                warn!("Failed to establish telnet connection: {e}. Waiting before new attempt...");
+                tokio::time::sleep(Duration::from_secs(10)).await;
+                continue;
+            }
+        };
+        let mut reader = FramedRead::new(connection, TelnetPromptDecoder {});
+        debug!("Discarding initial frame");
+        let _ = reader.next().await.unwrap().unwrap();
+
+        // The last time we queried an update
+        let mut last_requested_update = Instant::now() - Duration::from_secs(60);
+        // The main loop, most time should be spent in here
+        loop {
+            select! {
+                _ = tokio::time::sleep_until((last_requested_update + Duration::from_secs(10)).into()) => {
+                    let (temperature, humidity) = query_sht33_values(&mut reader).await.unwrap();
+                    pv_temperature.store(&temperature);
+                    pv_humidity.store(&humidity);
+                    println!("SHT33: Temperature: {temperature:-.2}°C   Humidity: {humidity:.1} %",);
+                    last_requested_update = Instant::now();
+                    // Start the server, if we didn't yet
+                    if server.is_none() {
+                        server = Some(ServerBuilder::new(library.clone()).start().await.unwrap());
+                    }
+                },
+                _ = reader.get_ref().disconnected() => break,
             }
         }
-
-        // println!("Got response: {}", str::from_utf8(&response).unwrap());
+        // Just a general sleep before trying again
         tokio::time::sleep(Duration::from_secs(5)).await;
     }
 }
