@@ -1,9 +1,9 @@
 use anyhow::{Result, anyhow};
-use futures_core::Stream;
+
 use futures_util::stream::StreamExt;
 use regex::bytes::Regex;
 use std::{
-    io::{self, Write},
+    io::{self},
     net::ToSocketAddrs,
     task::Poll,
     thread::{self, JoinHandle},
@@ -19,7 +19,7 @@ use tokio_util::{
     codec::{Decoder, FramedRead},
     sync::CancellationToken,
 };
-use tracing::debug;
+use tracing::{debug, trace};
 
 struct AsyncTelnet {
     thread: JoinHandle<Result<()>>,
@@ -48,13 +48,13 @@ impl AsyncTelnet {
             buffer: Vec::new(),
         }
     }
-    async fn stop(mut self) {
+    async fn stop(self) {
         self.cancel.cancel();
         let _ = tokio::task::spawn_blocking(|| self.thread.join()).await;
     }
-    async fn send(self, request: Vec<u8>) -> Result<()> {
+    async fn send(&self, request: &[u8]) -> Result<()> {
         let (tx, rx) = oneshot::channel();
-        self.req_tx.send((tx, request)).await?;
+        self.req_tx.send((tx, request.to_vec())).await?;
         rx.await??;
         Ok(())
     }
@@ -180,7 +180,7 @@ impl AsyncTelnetInternal {
 
     /// Do logging and passing of data to the user
     fn handle_data(&mut self, data: Vec<u8>) -> Result<(), mpsc::error::SendError<Vec<u8>>> {
-        debug!(
+        trace!(
             "Receieved:\n{}",
             String::from_utf8_lossy(&data)
                 .lines()
@@ -310,31 +310,21 @@ async fn main() {
         .with_max_level(tracing::Level::DEBUG)
         .init();
 
-    let mut connection = AsyncTelnet::connect("i24-jf9mb-ctrl:23");
-
+    let connection = AsyncTelnet::connect("i24-jf9mb-ctrl:23");
     let mut reader = FramedRead::new(connection, TelnetPromptDecoder {});
-
-    while let Some(frame) = reader.next().await {
-        println!("Frame: {}", str::from_utf8(&frame.unwrap()).unwrap());
+    // let command = None;
+    let _ = reader.next().await.unwrap().unwrap();
+    debug!("Discarding initial frame");
+    loop {
+        reader
+            .get_mut()
+            .send("/power_control/i2c_sht33/i2ctransfer -y 0 w2@0x44 0xe0 0x00 r6\n".as_bytes())
+            .await
+            .unwrap();
+        let response = reader.next().await.unwrap().unwrap();
+        println!("Got response: {}", str::from_utf8(&response).unwrap());
+        tokio::time::sleep(Duration::from_secs(5)).await;
     }
-    // reader.
-    // Lifecycle state:
-    //     None => No command running, ready for command
-    //     Some(Command) => Emitted command, waiting for response
-    // let mut command = None;
-    // Buffer to hold incomplete data
-    // let mut buffer = String::new();
-    // loop {
-    //     let Some(data) = connection.data_rx.recv().await else {
-    //         break;
-    //     };
-    //     // Data could have come through incomplete or split.
-    //     // Add this new data to our existing buffer, so we can handle when ready.
-    //     buffer.push_str(str::from_utf8(&data).unwrap());
 
-    //     // if message.contains("root:/>") {}
-
-    //     io::stdout().flush().unwrap();
-    // }
-    // connection.stop().await;
+    reader.into_inner().stop().await;
 }
