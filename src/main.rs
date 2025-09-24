@@ -1,5 +1,6 @@
 use anyhow::{Result, anyhow};
 
+use epicars::{Server, ServerBuilder, providers::IntercomProvider};
 use futures_util::stream::StreamExt;
 use regex::bytes::Regex;
 use std::{
@@ -7,13 +8,14 @@ use std::{
     net::ToSocketAddrs,
     task::Poll,
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 use telnet::{Action, Event, Telnet, TelnetOption};
 use tokio::{
     io::AsyncRead,
     runtime::Handle,
-    sync::{mpsc, oneshot},
+    select,
+    sync::{mpsc, oneshot, watch},
 };
 use tokio_util::{
     codec::{Decoder, FramedRead},
@@ -21,7 +23,14 @@ use tokio_util::{
 };
 use tracing::{debug, trace};
 
+#[derive(Clone, Copy, Debug)]
+enum ConnectionState {
+    Disconnected,
+    Connected,
+}
+
 struct AsyncTelnet {
+    state: watch::Receiver<ConnectionState>,
     thread: JoinHandle<Result<()>>,
     cancel: CancellationToken,
     data_rx: mpsc::Receiver<Vec<u8>>,
@@ -35,18 +44,25 @@ impl AsyncTelnet {
         let (req_tx, req_rx) = mpsc::channel(16);
         let cancel = CancellationToken::new();
         let cancel_sub = cancel.clone();
+        let (state_tx, state_rx) = watch::channel(ConnectionState::Disconnected);
         debug!("Spawning new thread to talk to telnet");
         // addr.to_socket_addrs().unwrap()
-        let thread =
-            thread::spawn(move || AsyncTelnetInternal::start(addr, cancel_sub, data_tx, req_rx));
+        let thread = thread::spawn(move || {
+            AsyncTelnetInternal::start(addr, cancel_sub, data_tx, req_rx, state_tx)
+        });
         debug!("Done spawning thread");
         AsyncTelnet {
+            state: state_rx,
             thread,
             cancel,
             data_rx,
             req_tx,
             buffer: Vec::new(),
         }
+    }
+
+    fn get_state(&self) -> watch::Receiver<ConnectionState> {
+        self.state.clone()
     }
 
     #[allow(dead_code)]
@@ -62,11 +78,6 @@ impl AsyncTelnet {
     }
 }
 
-// impl Drop for AsyncTelnet {
-//     fn drop(&mut self) {
-//         self.stop();
-//     }
-// }
 struct AsyncTelnetInternal {
     cancel: CancellationToken,
     data_tx: mpsc::Sender<Vec<u8>>,
@@ -78,6 +89,7 @@ impl AsyncTelnetInternal {
         cancel: CancellationToken,
         data_tx: mpsc::Sender<Vec<u8>>,
         req_rx: mpsc::Receiver<(oneshot::Sender<io::Result<usize>>, Vec<u8>)>,
+        state_tx: watch::Sender<ConnectionState>,
     ) -> Result<()> {
         let mut internal = Self {
             cancel: cancel.clone(),
@@ -92,14 +104,24 @@ impl AsyncTelnetInternal {
 
         // Run until cancelled or cannot communicate any longer
         loop {
-            let _ = internal.run_one_connection(rt.handle(), &addr);
-
+            // If here, we either just started or got disconnected
+            state_tx.send_if_modified(|f| match f {
+                ConnectionState::Disconnected => false,
+                _ => {
+                    *f = ConnectionState::Disconnected;
+                    true
+                }
+            });
+            if let Ok(connection) = Self::connect(&addr) {
+                state_tx.send_modify(|f| *f = ConnectionState::Connected);
+                let _ = internal.run_one_connection(connection, rt.handle());
+                state_tx.send_modify(|f| *f = ConnectionState::Disconnected);
+            };
             // Check to see if we should continue
             if cancel.is_cancelled() || internal.data_tx.is_closed() || internal.req_rx.is_closed()
             {
                 break;
             }
-
             debug!("Telnet client failed/disconnected. Reconnecting shortly...");
             thread::sleep(Duration::from_secs(3));
         }
@@ -193,19 +215,18 @@ impl AsyncTelnetInternal {
         self.data_tx.blocking_send(data)
     }
 
-    fn run_one_connection(
-        &mut self,
-        handle: &Handle,
-        addr: impl ToSocketAddrs + std::fmt::Debug,
-    ) -> Result<()> {
+    fn connect(addr: impl ToSocketAddrs + std::fmt::Debug) -> Result<Telnet> {
         let sa = addr
             .to_socket_addrs()?
             .next()
             .ok_or(anyhow!("Could not decode address: {addr:?}"))?;
         debug!("Trying {sa}...");
-        let mut connection = Telnet::connect(sa, 256)?;
-
+        let connection = Telnet::connect(sa, 256)?;
         debug!("Connected to {addr:?}");
+        Ok(connection)
+    }
+
+    fn run_one_connection(&mut self, mut connection: Telnet, handle: &Handle) -> Result<()> {
         self.handle_data(Self::negotiate_connection(&mut connection)?)?;
 
         // Now we are past negotiation, start the main loop
@@ -335,14 +356,40 @@ async fn main() {
         .with_max_level(tracing::Level::DEBUG)
         .init();
 
+    let mut library = IntercomProvider::new();
+    let pv_connected = library
+        .add_pv("BL24I-JUNGFRAU:CTRL:CONNEcTED", 0i8)
+        .unwrap();
+
     let connection = AsyncTelnet::connect("i24-jf9mb-ctrl:23");
+    let mut statewatch = connection.get_state();
     let mut reader = FramedRead::new(connection, TelnetPromptDecoder {});
 
+    // println!("State: {:?}", statewatch.borrow_and_update());
     let _ = reader.next().await.unwrap().unwrap();
     debug!("Discarding initial frame");
+
+    let server = ServerBuilder::new(library).start().await.unwrap();
+
+    // The last time we queried an update
+    let mut last_requested_update = Instant::now() - Duration::from_secs(60);
     loop {
-        let (temperature, humidity) = query_sht33_values(&mut reader).await.unwrap();
-        println!("SHT33: Temperature: {temperature:-.2}°C   Humidity: {humidity:.1} %",);
+        select! {
+            _ = statewatch.changed() => {
+                let state = *statewatch.borrow_and_update();
+                println!("Connection state: {:?}", statewatch.borrow_and_update());
+                match state {
+                    ConnectionState::Connected => pv_connected.store(&1i8),
+                    ConnectionState::Disconnected => pv_connected.store(&0i8),
+                };
+            },
+            _ = tokio::time::sleep_until((last_requested_update + Duration::from_secs(10)).into()) => {
+                let (temperature, humidity) = query_sht33_values(&mut reader).await.unwrap();
+                println!("SHT33: Temperature: {temperature:-.2}°C   Humidity: {humidity:.1} %",);
+                last_requested_update = Instant::now();
+            }
+        }
+
         // println!("Got response: {}", str::from_utf8(&response).unwrap());
         tokio::time::sleep(Duration::from_secs(5)).await;
     }
