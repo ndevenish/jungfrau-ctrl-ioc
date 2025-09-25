@@ -15,7 +15,7 @@ use tokio::{
     io::AsyncRead,
     runtime::Handle,
     select,
-    sync::{mpsc, oneshot},
+    sync::{broadcast::error::RecvError, mpsc, oneshot},
 };
 use tokio_util::{
     codec::{Decoder, FramedRead},
@@ -197,8 +197,8 @@ impl AsyncTelnetInternal {
                     connection.subnegotiate(TelnetOption::TTYPE, "xterm".as_bytes())?;
                 }
                 Event::Subnegotiation(TelnetOption::TSPEED, data) if data.first() == Some(&1) => {
-                    debug!("CTRL:   └ Responding TSPEED = 9600,9600");
-                    connection.subnegotiate(TelnetOption::TSPEED, "38400,38400".as_bytes())?;
+                    debug!("CTRL:   └ Responding TSPEED = 115200,115200");
+                    connection.subnegotiate(TelnetOption::TSPEED, "115200,115200".as_bytes())?;
                 }
                 Event::Data(d) => {
                     debug!("Received first data, opening negotiation complete");
@@ -252,11 +252,22 @@ impl AsyncTelnetInternal {
                     debug!("Communication receiver dropped; terminating telnet connection");
                     break;
                 };
+                assert!(!request.is_empty(), "Asked to send empty request");
+                trace!(
+                    "Sending data:\n{}",
+                    String::from_utf8_lossy(&request)
+                        .lines()
+                        .map(|s| format!("> {s}"))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                );
                 send.send(connection.write(&request))
                     .map_err(|_| anyhow!("Could not send data to internal process"))?;
             }
         }
         debug!("Terminating single telnet connection");
+        // Try to write a clean disconnect
+        let _ = connection.write("exit".as_bytes());
         Ok(())
     }
 }
@@ -312,10 +323,35 @@ impl Decoder for TelnetPromptDecoder {
             Some(rematch) => (rematch.start(), rematch.end()),
             None => return Ok(None),
         };
+        trace!("Got match {}-{} on: {:?}", start, end, src);
         let mut data_out = src.split_to(end);
         data_out.truncate(start);
         Ok(Some(data_out.to_vec()))
     }
+}
+
+async fn query_state(reader: &mut FramedRead<AsyncTelnet, TelnetPromptDecoder>) -> Result<bool> {
+    reader
+        .get_ref()
+        .send("cat /var/log/state\n".as_bytes())
+        .await?;
+    let data = reader.next().await.unwrap().unwrap();
+    Ok(str::from_utf8(&data)?.trim().parse::<i16>()? == 1i16)
+}
+
+async fn switch_power(
+    reader: &mut FramedRead<AsyncTelnet, TelnetPromptDecoder>,
+    to_value: bool,
+) -> Result<()> {
+    let command = if to_value {
+        "/power_control/on\n"
+    } else {
+        "/power_control/off\n"
+    };
+    debug!("Issuing '{}'", command.trim());
+    reader.get_ref().send(command.as_bytes()).await?;
+    let _ = reader.next().await.unwrap().unwrap();
+    Ok(())
 }
 
 /// Do the I2C query for the SHT33 values
@@ -327,8 +363,7 @@ async fn query_sht33_values(
         .send(
             "/power_control/i2c_sht33/i2ctransfer -y 0 w2@0x44 0xe0 0x00 r6; echo $?\n".as_bytes(),
         )
-        .await
-        .unwrap();
+        .await?;
     let data = reader.next().await.unwrap().unwrap();
     let response = str::from_utf8(&data).unwrap();
     let lines: Vec<_> = response.lines().collect();
@@ -363,13 +398,14 @@ async fn main() {
     let pv_humidity = library
         .add_pv("BL24I-JUNGFRAU:CTRL:HUMIDITY", 0f32)
         .unwrap();
-    let pv_switch = library.add_pv("BL24I-JUNGFRAU:CTRL:SWITCH", 0f32).unwrap();
-    let pv_switch = library.add_pv("BL24I-JUNGFRAU:CTRL:POWER", 0f32).unwrap();
+    let pv_switch = library.add_pv("BL24I-JUNGFRAU:CTRL:SWITCH", 0i8).unwrap();
+    let pv_power = library.add_pv("BL24I-JUNGFRAU:CTRL:POWER", 0i8).unwrap();
 
+    let mut switch_watch = pv_switch.subscribe();
     // Don't start the server until we have the first value
     let mut server = None;
 
-    loop {
+    '_outer: loop {
         let connection = match AsyncTelnet::connect("i24-jf9mb-ctrl:23").await {
             Ok(c) => c,
             Err(e) => {
@@ -378,9 +414,12 @@ async fn main() {
                 continue;
             }
         };
+        pv_connected.store(&1);
         let mut reader = FramedRead::new(connection, TelnetPromptDecoder {});
         debug!("Discarding initial frame");
         let _ = reader.next().await.unwrap().unwrap();
+
+        // Scrape info
 
         // The last time we queried an update
         let mut last_requested_update = Instant::now() - Duration::from_secs(60);
@@ -391,7 +430,17 @@ async fn main() {
                     let (temperature, humidity) = query_sht33_values(&mut reader).await.unwrap();
                     pv_temperature.store(&temperature);
                     pv_humidity.store(&humidity);
-                    println!("SHT33: Temperature: {temperature:-.2}°C   Humidity: {humidity:.1} %",);
+                    let state = query_state(&mut reader).await.unwrap();
+                    if state != (pv_power.load() == 1) {
+                        pv_power.store(if state { &1i8 } else {&0i8});
+                    }
+                    println!("SHT33 Temperature: {temperature:-.2}°C   Humidity: {humidity:2.1} %   Power: {state:?}",);
+                    // println!("Power on: {state:?}");
+                    // Under assumption controlled elsewhere, copy the power state to switch
+                    if state != (pv_switch.load() == 1) {
+                        warn!("Switch does not match power {state:?}; toggling switch PV to match under assumption controlled elsewhere.");
+                        pv_switch.store(&pv_power.load());
+                    }
                     last_requested_update = Instant::now();
                     // Start the server, if we didn't yet
                     if server.is_none() {
@@ -399,9 +448,43 @@ async fn main() {
                     }
                 },
                 _ = reader.get_ref().disconnected() => break,
+                _ = tokio::signal::ctrl_c() => {
+                    reader.into_inner().stop().await;
+                    break '_outer;
+                },
+                v = switch_watch.recv() => match v {
+                    // We've explicitly had the switch PV toggled
+                    Ok(dbr) => {
+                        let Ok(v) : Result<Vec<i8>, _> = dbr.value().try_into() else {
+                            warn!("Could not convert Switch DBR {dbr:?} into Vec<i8>!?!?!?");
+                            continue;
+                        };
+                        let desired_state = v.first() == Some(&1i8);
+                        let current_state = pv_power.load() == 1i8;
+                        match (current_state, desired_state) {
+                            (true, false) => {
+                                debug!("Switch switched to OFF, turning off detector ROB");
+                                let _ = switch_power(&mut reader, desired_state).await;
+                            },
+                            (false, true) => {
+                                debug!("Switch switched to ON, turning on detector ROB");
+                                let _ = switch_power(&mut reader, desired_state).await;
+                            },
+                            _ => {}, // It already matches
+                        };
+                        let state = query_state(&mut reader).await.unwrap();
+                        if state != (pv_power.load() == 1) {
+                            pv_power.store(if state { &1i8 } else {&0i8});
+                            println!("Power on: {state:?}");
+                        }
+                    },
+                    Err(RecvError::Closed) => {},
+                    Err(RecvError::Lagged(n)) => debug!("Dropped {n} messages listening for changes"),
+                }
             }
         }
         // Just a general sleep before trying again
+        pv_connected.store(&0);
         tokio::time::sleep(Duration::from_secs(5)).await;
     }
 }
