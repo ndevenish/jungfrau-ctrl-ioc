@@ -21,7 +21,8 @@ use tokio_util::{
     codec::{Decoder, FramedRead},
     sync::CancellationToken,
 };
-use tracing::{debug, trace, warn};
+use tracing::{debug, info, trace, warn};
+use tracing_subscriber::EnvFilter;
 
 struct AsyncTelnet {
     thread: Option<JoinHandle<()>>,
@@ -384,9 +385,17 @@ async fn query_sht33_values(
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
-    tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
-        .init();
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+        EnvFilter::default()
+            .add_directive("warn".parse().unwrap())
+            .add_directive(
+                format!("{}=debug", env!("CARGO_CRATE_NAME"))
+                    .parse()
+                    .unwrap(),
+            )
+    });
+
+    tracing_subscriber::fmt().with_env_filter(filter).init();
 
     let mut library = IntercomProvider::new();
     let pv_connected = library
@@ -434,7 +443,7 @@ async fn main() {
                     if state != (pv_power.load() == 1) {
                         pv_power.store(if state { &1i8 } else {&0i8});
                     }
-                    println!("SHT33 Temperature: {temperature:-.2}°C   Humidity: {humidity:2.1} %   Power: {state:?}",);
+                    info!("SHT33 Temperature: {temperature:-.2}°C   Humidity: {humidity:2.1} %   Power: {state:?}",);
                     // println!("Power on: {state:?}");
                     // Under assumption controlled elsewhere, copy the power state to switch
                     if state != (pv_switch.load() == 1) {
