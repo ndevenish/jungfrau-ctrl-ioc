@@ -1,8 +1,8 @@
 use anyhow::{Result, anyhow};
 
-use controlboard::{AsyncTelnet, TelnetPromptDecoder};
 use epicars::{ServerBuilder, providers::IntercomProvider};
 use futures_util::stream::StreamExt;
+use jungfrau_ctrl_ioc::{AsyncTelnet, TelnetPromptDecoder};
 use std::time::{Duration, Instant};
 use tokio::{select, sync::broadcast::error::RecvError};
 use tokio_util::codec::FramedRead;

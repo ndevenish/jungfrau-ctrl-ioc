@@ -1,5 +1,5 @@
 [package]
-name = "jungfrau-control-ioc"
+name = "jungfrau-ctrl-ioc"
 version = "0.1.0"
 edition = "2024"
 

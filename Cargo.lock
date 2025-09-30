@@ -72,22 +72,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2fd1289c04a9ea8cb22300a459a72a385d7c73d3259e2ed7dcb2af674838cfa9"
 
 [[package]]
-name = "controlboard"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "epicars",
- "futures-core",
- "futures-util",
- "regex",
- "telnet",
- "tokio",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "epicars"
 version = "0.2.0"
 dependencies = [
@@ -177,6 +161,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bf466541e9d546596ee94f9f69590f89473455f88372423e0008fc1a7daf100e"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "jungfrau-ctrl-ioc"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "epicars",
+ "futures-core",
+ "futures-util",
+ "regex",
+ "telnet",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
