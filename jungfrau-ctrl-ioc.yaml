@@ -1,0 +1,21 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jungfrau-ctrl-ioc
+  namespace: i24-beamline
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jungfrau-ctrl-ioc
+  strategy: {}
+  template:
+    metadata:
+      name: jungfrau-ctrl-ioc
+      labels:
+        app: jungfrau-ctrl-ioc
+    spec:
+      containers:
+        - image: gitlab.diamond.ac.uk:5050/mep23677/jungfrau-ctrl-ioc:latest
+          imagePullPolicy: Always
+          name: jungfrau-ctrl-ioc
