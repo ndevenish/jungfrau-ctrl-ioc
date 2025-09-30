@@ -1,10 +1,13 @@
 use anyhow::{Result, anyhow};
 
-use epicars::{ServerBuilder, providers::IntercomProvider};
+use epicars::{
+    ServerBuilder,
+    providers::{IntercomProvider, intercom::ConverterRecvError},
+};
 use futures_util::stream::StreamExt;
 use jungfrau_ctrl_ioc::{AsyncTelnet, TelnetPromptDecoder};
 use std::time::{Duration, Instant};
-use tokio::{select, sync::broadcast::error::RecvError};
+use tokio::select;
 use tokio_util::codec::FramedRead;
 use tracing::{debug, info, warn};
 use tracing_subscriber::EnvFilter;
@@ -161,7 +164,7 @@ async fn main() {
                         "-----".to_string()
                     };
 
-                    info!("SHT33 Temperature: {temperature:-.2}°C   Humidity: {humidity:2.1} %   Power: {state:?}",);
+                    info!("SHT33 Temperature: {temperature:-.2}°C   Humidity: {humidity:2.1} %   Power: {state}",);
 
                     last_requested_update = Instant::now();
                     // Start the server, if we didn't yet, so we never expose pre-values
@@ -176,12 +179,7 @@ async fn main() {
                 },
                 v = switch_watch.recv() => match v {
                     // We've explicitly had the switch PV toggled
-                    Ok(dbr) => {
-                        let Ok(v) : Result<Vec<i8>, _> = dbr.value().try_into() else {
-                            warn!("Could not convert Switch DBR {dbr:?} into Vec<i8>!?!?!?");
-                            continue;
-                        };
-                        let desired_state = v.first() == Some(&1i8);
+                    Ok(desired_state) => {
                         let current_state = pv_power.load();
                         match (current_state, desired_state) {
                             (true, false) => {
@@ -200,8 +198,9 @@ async fn main() {
                             println!("Power on: {state:?}");
                         }
                     },
-                    Err(RecvError::Closed) => {},
-                    Err(RecvError::Lagged(n)) => debug!("Dropped {n} messages listening for changes"),
+                    Err(ConverterRecvError::Closed) => {},
+                    Err(ConverterRecvError::Lagged(n)) => debug!("Dropped {n} messages listening for changes"),
+                    Err(ConverterRecvError::ConversionError) => warn!("Failed to convert subscribe data"),
                 }
             }
         }
