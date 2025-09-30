@@ -114,7 +114,7 @@ async fn main() {
                 continue;
             }
         };
-        pv_connected.store(&1);
+        pv_connected.store(1);
         let mut reader = FramedRead::new(connection, TelnetPromptDecoder {});
         debug!("Discarding initial frame");
         let _ = reader.next().await.unwrap().unwrap();
@@ -130,15 +130,15 @@ async fn main() {
                     let Ok((temperature, humidity)) = query_sht33_values(&mut reader).await else {
                         continue;
                     };
-                    pv_temperature.store(&temperature);
-                    pv_humidity.store(&humidity);
+                    pv_temperature.store(temperature);
+                    pv_humidity.store(humidity);
                     let state = if let Ok(state) = query_power_state(&mut reader).await {
                         if state != (pv_power.load() == 1) {
-                        pv_power.store(if state { &1i8 } else {&0i8});
+                        pv_power.store(if state { 1i8 } else { 0i8 });
                         // Under assumption controlled elsewhere, copy the power state to switch
                             if state != (pv_switch.load() == 1) {
                                 warn!("Power state {state:?} does not match PV. Updating PV to match, as controlled from elsewhere");
-                                pv_switch.store(&pv_power.load());
+                                pv_switch.store(pv_power.load());
                             }
                         }
                         format!("{state:?}")
@@ -182,7 +182,7 @@ async fn main() {
                         };
                         let state = query_power_state(&mut reader).await.unwrap();
                         if state != (pv_power.load() == 1) {
-                            pv_power.store(if state { &1i8 } else {&0i8});
+                            pv_power.store(if state { 1 } else { 0 });
                             println!("Power on: {state:?}");
                         }
                     },
@@ -192,7 +192,7 @@ async fn main() {
             }
         }
         // Just a general sleep before trying again
-        pv_connected.store(&0);
+        pv_connected.store(0);
         tokio::time::sleep(Duration::from_secs(5)).await;
     }
 }
