@@ -15,6 +15,7 @@ spec:
       labels:
         app: jungfrau-ctrl-ioc
     spec:
+      hostNetwork: true
       containers:
         - image: gitlab.diamond.ac.uk:5050/mep23677/jungfrau-ctrl-ioc:latest
           imagePullPolicy: Always
