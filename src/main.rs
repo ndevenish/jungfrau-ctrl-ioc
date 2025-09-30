@@ -90,16 +90,30 @@ async fn main() {
 
     let mut library = IntercomProvider::new();
     let pv_connected = library
-        .add_pv("BL24I-JUNGFRAU:CTRL:CONNECTED", 0i8)
+        .build_pv("BL24I-JUNGFRAU:CTRL:CONNECTED", 0i8)
+        .read_only(true)
+        .build()
         .unwrap();
     let pv_temperature = library
-        .add_pv("BL24I-JUNGFRAU:CTRL:TEMPERATURE", 20f32)
+        .build_pv("BL24I-JUNGFRAU:CTRL:TEMPERATURE", 20f32)
+        .read_only(true)
+        .build()
         .unwrap();
     let pv_humidity = library
-        .add_pv("BL24I-JUNGFRAU:CTRL:HUMIDITY", 0f32)
+        .build_pv("BL24I-JUNGFRAU:CTRL:HUMIDITY", 0f32)
+        .read_only(true)
+        .build()
         .unwrap();
-    let pv_switch = library.add_pv("BL24I-JUNGFRAU:CTRL:SWITCH", 0i8).unwrap();
-    let pv_power = library.add_pv("BL24I-JUNGFRAU:CTRL:POWER", 0i8).unwrap();
+    let pv_switch = library
+        .build_pv("BL24I-JUNGFRAU:CTRL:SWITCH", 0i8)
+        .rbv(true)
+        .build()
+        .unwrap();
+    let pv_power = library
+        .build_pv("BL24I-JUNGFRAU:CTRL:POWER", 0i8)
+        .rbv(true)
+        .build()
+        .unwrap();
 
     let mut switch_watch = pv_switch.subscribe();
     // Don't start the server until we have the first value
