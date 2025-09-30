@@ -1,0 +1,18 @@
+variables:
+  GIT_SUBMODULE_STRATEGY: recursive
+
+stages:
+ - build
+
+build-image:
+  stage: build
+  tags:
+    - docker-image
+  image:
+    name: gcr.io/kaniko-project/executor:v1.23.2-debug
+    entrypoint: [""]
+  script:
+    - /kaniko/executor
+      --context "${CI_PROJECT_DIR}"
+      --destination ${CI_REGISTRY_IMAGE}:latest
+
