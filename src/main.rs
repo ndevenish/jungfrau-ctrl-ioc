@@ -90,7 +90,7 @@ async fn main() {
 
     let mut library = IntercomProvider::new();
     let pv_connected = library
-        .build_pv("BL24I-JUNGFRAU:CTRL:CONNECTED", 0i8)
+        .build_pv("BL24I-JUNGFRAU:CTRL:CONNECTED", false)
         .read_only(true)
         .build()
         .unwrap();
@@ -105,12 +105,12 @@ async fn main() {
         .build()
         .unwrap();
     let pv_switch = library
-        .build_pv("BL24I-JUNGFRAU:CTRL:SWITCH", 0i8)
+        .build_pv("BL24I-JUNGFRAU:CTRL:SWITCH", false)
         .rbv(true)
         .build()
         .unwrap();
     let pv_power = library
-        .build_pv("BL24I-JUNGFRAU:CTRL:POWER", 0i8)
+        .build_pv("BL24I-JUNGFRAU:CTRL:POWER", false)
         .rbv(true)
         .build()
         .unwrap();
@@ -128,7 +128,7 @@ async fn main() {
                 continue;
             }
         };
-        pv_connected.store(1);
+        pv_connected.store(true);
         let mut reader = FramedRead::new(connection, TelnetPromptDecoder {});
         debug!("Discarding initial frame");
         let _ = reader.next().await.unwrap().unwrap();
@@ -147,10 +147,10 @@ async fn main() {
                     pv_temperature.store(temperature);
                     pv_humidity.store(humidity);
                     let state = if let Ok(state) = query_power_state(&mut reader).await {
-                        if state != (pv_power.load() == 1) {
-                        pv_power.store(if state { 1i8 } else { 0i8 });
+                        if state != pv_power.load() {
+                        pv_power.store(state);
                         // Under assumption controlled elsewhere, copy the power state to switch
-                            if state != (pv_switch.load() == 1) {
+                            if state != pv_switch.load() {
                                 warn!("Power state {state:?} does not match PV. Updating PV to match, as controlled from elsewhere");
                                 pv_switch.store(pv_power.load());
                             }
@@ -182,7 +182,7 @@ async fn main() {
                             continue;
                         };
                         let desired_state = v.first() == Some(&1i8);
-                        let current_state = pv_power.load() == 1i8;
+                        let current_state = pv_power.load();
                         match (current_state, desired_state) {
                             (true, false) => {
                                 debug!("Switch switched to OFF, turning off detector ROB");
@@ -195,8 +195,8 @@ async fn main() {
                             _ => {}, // It already matches
                         };
                         let state = query_power_state(&mut reader).await.unwrap();
-                        if state != (pv_power.load() == 1) {
-                            pv_power.store(if state { 1 } else { 0 });
+                        if state != pv_power.load() {
+                            pv_power.store(state);
                             println!("Power on: {state:?}");
                         }
                     },
@@ -206,7 +206,7 @@ async fn main() {
             }
         }
         // Just a general sleep before trying again
-        pv_connected.store(0);
+        pv_connected.store(false);
         tokio::time::sleep(Duration::from_secs(5)).await;
     }
 }
