@@ -129,6 +129,8 @@ async fn main() {
         .unwrap();
     let pv_state = library
         .build_pv(&format!("{prefix}STATE"), String::new())
+        .minimum_length(32)
+        .read_only(true)
         .build()
         .unwrap();
 
