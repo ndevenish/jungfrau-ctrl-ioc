@@ -1,5 +1,6 @@
 use anyhow::{Result, anyhow};
 
+use clap::Parser;
 use epicars::{
     ServerBuilder,
     providers::{IntercomProvider, intercom::ConverterRecvError},
@@ -77,8 +78,16 @@ async fn query_sht33_values(
     Ok((temperature, humidity))
 }
 
+#[derive(Parser)]
+struct Args {
+    #[arg(long, default_value = "BL24I-JUNGFRAU:CTRL:")]
+    prefix: String,
+}
+
 #[tokio::main(flavor = "current_thread")]
 async fn main() {
+    let opts = Args::parse();
+    let prefix = opts.prefix;
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| {
         EnvFilter::default()
             .add_directive("warn".parse().unwrap())
@@ -88,33 +97,38 @@ async fn main() {
                     .unwrap(),
             )
     });
-
     tracing_subscriber::fmt().with_env_filter(filter).init();
+
+    info!("Running with PV prefix {prefix}");
 
     let mut library = IntercomProvider::new();
     let pv_connected = library
-        .build_pv("BL24I-JUNGFRAU:CTRL:CONNECTED", false)
+        .build_pv(&format!("{prefix}CONNECTED"), false)
         .read_only(true)
         .build()
         .unwrap();
     let pv_temperature = library
-        .build_pv("BL24I-JUNGFRAU:CTRL:TEMPERATURE", 20f32)
+        .build_pv(&format!("{prefix}TEMPERATURE"), 20f32)
         .read_only(true)
         .build()
         .unwrap();
     let pv_humidity = library
-        .build_pv("BL24I-JUNGFRAU:CTRL:HUMIDITY", 0f32)
+        .build_pv(&format!("{prefix}HUMIDITY"), 0f32)
         .read_only(true)
         .build()
         .unwrap();
     let pv_switch = library
-        .build_pv("BL24I-JUNGFRAU:CTRL:SWITCH", false)
+        .build_pv(&format!("{prefix}SWITCH"), false)
         .rbv(true)
         .build()
         .unwrap();
     let pv_power = library
-        .build_pv("BL24I-JUNGFRAU:CTRL:POWER", false)
+        .build_pv(&format!("{prefix}POWER"), false)
         .rbv(true)
+        .build()
+        .unwrap();
+    let pv_state = library
+        .build_pv(&format!("{prefix}STATE"), String::new())
         .build()
         .unwrap();
 
@@ -123,6 +137,7 @@ async fn main() {
     let mut server = None;
 
     '_outer: loop {
+        pv_state.store("Disconnected".to_string());
         let connection = match AsyncTelnet::connect("i24-jf9mb-ctrl:23").await {
             Ok(c) => c,
             Err(e) => {
@@ -132,6 +147,7 @@ async fn main() {
             }
         };
         pv_connected.store(true);
+        pv_state.store("Connected".to_string());
         let mut reader = FramedRead::new(connection, TelnetPromptDecoder {});
         debug!("Discarding initial frame");
         let _ = reader.next().await.unwrap().unwrap();
@@ -142,8 +158,10 @@ async fn main() {
         let mut last_requested_update = Instant::now() - Duration::from_secs(60);
         // The main loop, most time should be spent in here
         loop {
+            pv_state.store("Ready".to_string());
             select! {
                 _ = tokio::time::sleep_until((last_requested_update + Duration::from_secs(10)).into()) => {
+                    pv_state.store("Reading state".to_string());
                     let Ok((temperature, humidity)) = query_sht33_values(&mut reader).await else {
                         continue;
                     };
@@ -184,10 +202,12 @@ async fn main() {
                         match (current_state, desired_state) {
                             (true, false) => {
                                 debug!("Switch switched to OFF, turning off detector ROB");
+                                pv_state.store("Powering down".to_string());
                                 let _ = switch_power(&mut reader, desired_state).await;
                             },
                             (false, true) => {
                                 debug!("Switch switched to ON, turning on detector ROB");
+                                pv_state.store("Powering up".to_string());
                                 let _ = switch_power(&mut reader, desired_state).await;
                             },
                             _ => {}, // It already matches
