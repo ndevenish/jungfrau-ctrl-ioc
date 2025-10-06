@@ -335,13 +335,12 @@ pub struct Pinger {
 }
 
 impl Pinger {
-    pub fn new(reply_to: mpsc::UnboundedSender<(String, bool)>) -> Self {
-        // ConfigBuilder:/
-        Self {
-            client: surge_ping::Client::new(&Config::default()).unwrap(),
+    pub fn new(reply_to: mpsc::UnboundedSender<(String, bool)>) -> Result<Self> {
+        Ok(Self {
+            client: surge_ping::Client::new(&Config::default())?,
             response: reply_to,
             in_progress: Arc::new(AtomicBool::new(false)),
-        }
+        })
     }
     pub fn ping(&self) {
         if self

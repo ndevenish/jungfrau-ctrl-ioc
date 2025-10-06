@@ -153,7 +153,10 @@ async fn main() {
     // Don't start the server until we have the first value
     let mut server = None;
     let (ping_tx, mut ping_rx) = mpsc::unbounded_channel();
-    let pinger = Pinger::new(ping_tx);
+    let pinger = Pinger::new(ping_tx).ok();
+    if pinger.is_none() {
+        warn!("Could not open datagram socket for ping: Will not monitor FEB state");
+    }
     '_outer: loop {
         pv_state.store("Disconnected".to_string());
         let connection = match AsyncTelnet::connect("i24-jf9mb-ctrl:23").await {
@@ -211,7 +214,9 @@ async fn main() {
                 },
                 _ = tokio::time::sleep_until((last_ping + Duration::from_secs(10)).into()) => {
                     last_ping = Instant::now();
-                    pinger.ping();
+                    if let Some(ref pinger) = pinger {
+                        pinger.ping();
+                    }
                 },
                 Some((hostname, success)) = ping_rx.recv() => {
                     let Some(module) = submodules.get(&hostname) else {
