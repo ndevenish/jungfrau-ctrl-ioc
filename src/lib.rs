@@ -365,13 +365,13 @@ impl Pinger {
                 let sender = response.clone();
                 let hostname = format!("i24-jf9mb-{:02}", i);
                 let Ok(mut ip) = tokio::net::lookup_host(hostname.clone()).await else {
-                    debug!("Could not resove host {hostname}");
+                    trace!("Could not resove host {hostname}");
                     let _ = sender.send((hostname.clone(), false));
                     complete_tasks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     continue;
                 };
                 let Some(ip) = ip.next().map(|v| v.ip()) else {
-                    debug!("Could not resove single IPv4 for {hostname}");
+                    trace!("Could not resove single IPv4 for {hostname}");
                     let _ = sender.send((hostname, false));
                     complete_tasks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     continue;
@@ -419,7 +419,7 @@ impl Pinger {
                 });
             }
             // Check complete tasks here.. it's possible we never even got to running
-            debug!(
+            trace!(
                 "Count at end: {}",
                 complete_tasks.load(std::sync::atomic::Ordering::SeqCst)
             );
