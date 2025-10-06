@@ -1,0 +1,852 @@
+4 0 1
+beginScreenProperties
+major 4
+minor 0
+release 1
+x 3407
+y 542
+w 575
+h 318
+font "helvetica-medium-r-14.0"
+ctlFont "courier-bold-r-14.0"
+btnFont "helvetica-medium-r-14.0"
+fgColor index 14
+bgColor index 3
+textColor index 14
+ctlFgColor1 index 25
+ctlFgColor2 index 30
+ctlBgColor1 index 3
+ctlBgColor2 index 3
+topShadowColor index 1
+botShadowColor index 11
+title "Jungfrau Control"
+showGrid
+snapToGrid
+endScreenProperties
+
+# (Rectangle)
+object activeRectangleClass
+beginObjectProperties
+major 4
+minor 0
+release 0
+x 10
+y 90
+w 230
+h 220
+lineColor index 14
+fillColor index 3
+endObjectProperties
+
+# (Static Text)
+object activeXTextClass
+beginObjectProperties
+major 4
+minor 1
+release 1
+x 10
+y 10
+w 550
+h 20
+font "arial-bold-r-14.0"
+fontAlign "center"
+fgColor index 14
+bgColor index 48
+value {
+  "Jungfrau Control Board"
+}
+endObjectProperties
+
+# (Lines)
+object activeLineClass
+beginObjectProperties
+major 4
+minor 0
+release 1
+x 750
+y 480
+w 0
+h 0
+lineColor index 7
+fillColor index 3
+numPoints 1
+xPoints {
+  0 750
+}
+yPoints {
+  0 480
+}
+endObjectProperties
+
+# (Exit Button)
+object activeExitButtonClass
+beginObjectProperties
+major 4
+minor 1
+release 0
+x 480
+y 280
+w 90
+h 30
+fgColor index 46
+bgColor index 3
+topShadowColor index 1
+botShadowColor index 11
+label "EXIT"
+font "arial-medium-r-18.0"
+3d
+endObjectProperties
+
+# (Text Monitor)
+object activeXTextDspClass:noedit
+beginObjectProperties
+major 4
+minor 6
+release 0
+x 460
+y 60
+w 100
+h 20
+controlPv "BL24I-JUNGFRAU:CTRL:TEMPERATURE"
+font "arial-bold-r-14.0"
+fontAlign "center"
+fgColor index 16
+bgColor index 10
+precision 2
+nullColor index 0
+smartRefresh
+fastUpdate
+showUnits
+newPos
+objType "monitors"
+noExecuteClipMask
+endObjectProperties
+
+# (Static Text)
+object activeXTextClass
+beginObjectProperties
+major 4
+minor 1
+release 1
+x 290
+y 60
+w 141
+h 16
+font "arial-bold-r-14.0"
+fgColor index 10
+bgColor index 0
+useDisplayBg
+value {
+  "SHT33 Temperature:"
+}
+autoSize
+endObjectProperties
+
+# (Text Monitor)
+object activeXTextDspClass:noedit
+beginObjectProperties
+major 4
+minor 6
+release 0
+x 460
+y 90
+w 100
+h 20
+controlPv "BL24I-JUNGFRAU:CTRL:HUMIDITY"
+font "arial-bold-r-14.0"
+fontAlign "center"
+fgColor index 16
+bgColor index 10
+precision 1
+nullColor index 0
+smartRefresh
+fastUpdate
+showUnits
+newPos
+objType "monitors"
+noExecuteClipMask
+endObjectProperties
+
+# (Static Text)
+object activeXTextClass
+beginObjectProperties
+major 4
+minor 1
+release 1
+x 290
+y 90
+w 114
+h 16
+font "arial-bold-r-14.0"
+fgColor index 10
+bgColor index 0
+useDisplayBg
+value {
+  "SHT33 Humidity:"
+}
+autoSize
+endObjectProperties
+
+# (Lines)
+object activeLineClass
+beginObjectProperties
+major 4
+minor 0
+release 1
+x 290
+y 170
+w 0
+h 0
+lineColor index 7
+fillColor index 3
+numPoints 1
+xPoints {
+  0 290
+}
+yPoints {
+  0 170
+}
+endObjectProperties
+
+# (Lines)
+object activeLineClass
+beginObjectProperties
+major 4
+minor 0
+release 1
+x 370
+y 60
+w 0
+h 0
+lineColor index 6
+fillColor index 3
+numPoints 1
+xPoints {
+  0 370
+}
+yPoints {
+  0 60
+}
+endObjectProperties
+
+# (Menu Mux PV)
+object menuMuxPVClass
+beginObjectProperties
+major 4
+minor 0
+release 0
+x 1330
+y 130
+w 140
+h 20
+fgColour index 14
+bgColour index 3
+topShadowColour index 1
+botShadowColour index 11
+font "helvetica-medium-r-14.0"
+numItems 1
+symbolTag {
+  0 "."
+}
+symbol0 {
+  0 "ARRAY1"
+}
+PV0 {
+  0 "$(P):ARRAY1DEVICE.VAL"
+}
+endObjectProperties
+
+# (Menu Mux PV)
+object menuMuxPVClass
+beginObjectProperties
+major 4
+minor 0
+release 0
+x 1330
+y 160
+w 140
+h 20
+fgColour index 14
+bgColour index 3
+topShadowColour index 1
+botShadowColour index 11
+font "helvetica-medium-r-14.0"
+numItems 1
+symbolTag {
+  0 "."
+}
+symbol0 {
+  0 "ARRAY2"
+}
+PV0 {
+  0 "$(P):ARRAY2DEVICE.VAL"
+}
+endObjectProperties
+
+# (Byte)
+object ByteClass
+beginObjectProperties
+major 4
+minor 0
+release 0
+x 190
+y 50
+w 30
+h 30
+controlPv "BL24I-JUNGFRAU:CTRL:CONNECTED"
+lineColor index 14
+onColor index 15
+offColor index 20
+numBits 1
+endObjectProperties
+
+# (Lines)
+object activeLineClass
+beginObjectProperties
+major 4
+minor 0
+release 1
+x 10
+y 10
+w 550
+h 20
+lineColor index 11
+fillColor index 0
+numPoints 3
+xPoints {
+  0 10
+  1 560
+  2 560
+}
+yPoints {
+  0 30
+  1 30
+  2 10
+}
+endObjectProperties
+
+# (Lines)
+object activeLineClass
+beginObjectProperties
+major 4
+minor 0
+release 1
+x 10
+y 10
+w 550
+h 20
+lineColor index 1
+fillColor index 0
+numPoints 3
+xPoints {
+  0 10
+  1 10
+  2 560
+}
+yPoints {
+  0 30
+  1 10
+  2 10
+}
+endObjectProperties
+
+# (Static Text)
+object activeXTextClass
+beginObjectProperties
+major 4
+minor 1
+release 1
+x 20
+y 50
+w 80
+h 30
+font "helvetica-bold-r-14.0"
+fgColor index 14
+bgColor index 3
+useDisplayBg
+value {
+  "Connected"
+}
+autoSize
+endObjectProperties
+
+# (Static Text)
+object activeXTextClass
+beginObjectProperties
+major 4
+minor 1
+release 1
+x 20
+y 140
+w 99
+h 16
+font "helvetica-bold-r-14.0"
+fgColor index 14
+bgColor index 3
+useDisplayBg
+value {
+  "Module Power"
+}
+autoSize
+endObjectProperties
+
+# (Menu Mux)
+object menuMuxClass
+beginObjectProperties
+major 4
+minor 1
+release 0
+x 140
+y 100
+w 90
+h 30
+fgColor index 14
+bgColor index 3
+topShadowColor index 1
+botShadowColor index 11
+controlPv "BL24I-JUNGFRAU:CTRL:SWITCH"
+font "helvetica-medium-r-14.0"
+numItems 2
+symbolTag {
+  0 "Off"
+  1 "On"
+}
+symbol0 {
+  0 "Ons"
+  1 "OffSys"
+}
+value0 {
+  0 "0"
+  1 "1"
+}
+endObjectProperties
+
+# (Static Text)
+object activeXTextClass
+beginObjectProperties
+major 4
+minor 1
+release 1
+x 20
+y 100
+w 93
+h 16
+font "helvetica-bold-r-14.0"
+fgColor index 14
+bgColor index 3
+useDisplayBg
+value {
+  "Power Switch"
+}
+autoSize
+endObjectProperties
+
+# (Text Monitor)
+object activeXTextDspClass:noedit
+beginObjectProperties
+major 4
+minor 6
+release 0
+x 250
+y 280
+w 220
+h 20
+controlPv "BL24I-JUNGFRAU:CTRL:STATUS"
+format "string"
+font "arial-bold-r-14.0"
+fontAlign "center"
+fgColor index 16
+bgColor index 10
+limitsFromDb
+nullColor index 0
+smartRefresh
+fastUpdate
+showUnits
+newPos
+objType "monitors"
+noExecuteClipMask
+endObjectProperties
+
+# (Static Text)
+object activeXTextClass
+beginObjectProperties
+major 4
+minor 1
+release 1
+x 250
+y 260
+w 96
+h 16
+font "arial-bold-r-14.0"
+fgColor index 10
+bgColor index 0
+useDisplayBg
+value {
+  "IOC Currently"
+}
+autoSize
+endObjectProperties
+
+# (Rectangle)
+object activeRectangleClass
+beginObjectProperties
+major 4
+minor 0
+release 0
+x 55
+y 165
+w 130
+h 130
+lineColor index 20
+fillColor index 15
+lineWidth 10
+visPv "BL24I-JUNGFRAU:CTRL:POWER"
+visMin "0"
+visMax "1"
+endObjectProperties
+
+# (Lines)
+object activeLineClass
+beginObjectProperties
+major 4
+minor 0
+release 1
+x 30
+y 210
+w 0
+h 0
+lineColor index 7
+fillColor index 3
+numPoints 1
+xPoints {
+  0 30
+}
+yPoints {
+  0 210
+}
+endObjectProperties
+
+# (Byte)
+object ByteClass
+beginObjectProperties
+major 4
+minor 0
+release 0
+x 60
+y 270
+w 40
+h 20
+controlPv "BL24I-JUNGFRAU:CTRL:BOARD00:STATE"
+lineColor index 14
+onColor index 15
+offColor index 20
+numBits 1
+endObjectProperties
+
+# (Byte)
+object ByteClass
+beginObjectProperties
+major 4
+minor 0
+release 0
+x 100
+y 270
+w 40
+h 20
+controlPv "BL24I-JUNGFRAU:CTRL:BOARD01:STATE"
+lineColor index 14
+onColor index 15
+offColor index 20
+numBits 1
+endObjectProperties
+
+# (Byte)
+object ByteClass
+beginObjectProperties
+major 4
+minor 0
+release 0
+x 140
+y 270
+w 40
+h 20
+controlPv "BL24I-JUNGFRAU:CTRL:BOARD02:STATE"
+lineColor index 14
+onColor index 15
+offColor index 20
+numBits 1
+endObjectProperties
+
+# (Byte)
+object ByteClass
+beginObjectProperties
+major 4
+minor 0
+release 0
+x 60
+y 250
+w 40
+h 20
+controlPv "BL24I-JUNGFRAU:CTRL:BOARD03:STATE"
+lineColor index 14
+onColor index 15
+offColor index 20
+numBits 1
+endObjectProperties
+
+# (Byte)
+object ByteClass
+beginObjectProperties
+major 4
+minor 0
+release 0
+x 100
+y 250
+w 40
+h 20
+controlPv "BL24I-JUNGFRAU:CTRL:BOARD04:STATE"
+lineColor index 14
+onColor index 15
+offColor index 20
+numBits 1
+endObjectProperties
+
+# (Byte)
+object ByteClass
+beginObjectProperties
+major 4
+minor 0
+release 0
+x 140
+y 250
+w 40
+h 20
+controlPv "BL24I-JUNGFRAU:CTRL:BOARD05:STATE"
+lineColor index 14
+onColor index 15
+offColor index 20
+numBits 1
+endObjectProperties
+
+# (Byte)
+object ByteClass
+beginObjectProperties
+major 4
+minor 0
+release 0
+x 60
+y 230
+w 40
+h 20
+controlPv "BL24I-JUNGFRAU:CTRL:BOARD06:STATE"
+lineColor index 14
+onColor index 15
+offColor index 20
+numBits 1
+endObjectProperties
+
+# (Byte)
+object ByteClass
+beginObjectProperties
+major 4
+minor 0
+release 0
+x 100
+y 230
+w 40
+h 20
+controlPv "BL24I-JUNGFRAU:CTRL:BOARD07:STATE"
+lineColor index 14
+onColor index 15
+offColor index 20
+numBits 1
+endObjectProperties
+
+# (Byte)
+object ByteClass
+beginObjectProperties
+major 4
+minor 0
+release 0
+x 140
+y 230
+w 40
+h 20
+controlPv "BL24I-JUNGFRAU:CTRL:BOARD08:STATE"
+lineColor index 14
+onColor index 15
+offColor index 20
+numBits 1
+endObjectProperties
+
+# (Byte)
+object ByteClass
+beginObjectProperties
+major 4
+minor 0
+release 0
+x 60
+y 210
+w 40
+h 20
+controlPv "BL24I-JUNGFRAU:CTRL:BOARD09:STATE"
+lineColor index 14
+onColor index 15
+offColor index 20
+numBits 1
+endObjectProperties
+
+# (Byte)
+object ByteClass
+beginObjectProperties
+major 4
+minor 0
+release 0
+x 100
+y 210
+w 40
+h 20
+controlPv "BL24I-JUNGFRAU:CTRL:BOARD10:STATE"
+lineColor index 14
+onColor index 15
+offColor index 20
+numBits 1
+endObjectProperties
+
+# (Byte)
+object ByteClass
+beginObjectProperties
+major 4
+minor 0
+release 0
+x 140
+y 210
+w 40
+h 20
+controlPv "BL24I-JUNGFRAU:CTRL:BOARD11:STATE"
+lineColor index 14
+onColor index 15
+offColor index 20
+numBits 1
+endObjectProperties
+
+# (Byte)
+object ByteClass
+beginObjectProperties
+major 4
+minor 0
+release 0
+x 60
+y 190
+w 40
+h 20
+controlPv "BL24I-JUNGFRAU:CTRL:BOARD12:STATE"
+lineColor index 14
+onColor index 15
+offColor index 20
+numBits 1
+endObjectProperties
+
+# (Byte)
+object ByteClass
+beginObjectProperties
+major 4
+minor 0
+release 0
+x 100
+y 190
+w 40
+h 20
+controlPv "BL24I-JUNGFRAU:CTRL:BOARD13:STATE"
+lineColor index 14
+onColor index 15
+offColor index 20
+numBits 1
+endObjectProperties
+
+# (Byte)
+object ByteClass
+beginObjectProperties
+major 4
+minor 0
+release 0
+x 140
+y 190
+w 40
+h 20
+controlPv "BL24I-JUNGFRAU:CTRL:BOARD14:STATE"
+lineColor index 14
+onColor index 15
+offColor index 20
+numBits 1
+endObjectProperties
+
+# (Byte)
+object ByteClass
+beginObjectProperties
+major 4
+minor 0
+release 0
+x 60
+y 170
+w 40
+h 20
+controlPv "BL24I-JUNGFRAU:CTRL:BOARD15:STATE"
+lineColor index 14
+onColor index 15
+offColor index 20
+numBits 1
+endObjectProperties
+
+# (Byte)
+object ByteClass
+beginObjectProperties
+major 4
+minor 0
+release 0
+x 100
+y 170
+w 40
+h 20
+controlPv "BL24I-JUNGFRAU:CTRL:BOARD16:STATE"
+lineColor index 14
+onColor index 15
+offColor index 20
+numBits 1
+endObjectProperties
+
+# (Byte)
+object ByteClass
+beginObjectProperties
+major 4
+minor 0
+release 0
+x 140
+y 170
+w 40
+h 20
+controlPv "BL24I-JUNGFRAU:CTRL:BOARD17:STATE"
+lineColor index 14
+onColor index 15
+offColor index 20
+numBits 1
+endObjectProperties
+
+# (Rectangle)
+object activeRectangleClass
+beginObjectProperties
+major 4
+minor 0
+release 0
+x 55
+y 165
+w 130
+h 130
+lineColor index 15
+fillColor index 15
+lineWidth 10
+visPv "BL24I-JUNGFRAU:CTRL:POWER"
+visMin "1"
+visMax "2"
+endObjectProperties
+
