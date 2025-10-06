@@ -368,11 +368,13 @@ impl Pinger {
                 let Ok(mut ip) = tokio::net::lookup_host(hostname.clone()).await else {
                     debug!("Could not resove host {hostname}");
                     let _ = sender.send((hostname.clone(), false));
+                    complete_tasks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     continue;
                 };
                 let Some(ip) = ip.next().map(|v| v.ip()) else {
                     debug!("Could not resove single IPv4 for {hostname}");
                     let _ = sender.send((hostname, false));
+                    complete_tasks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     continue;
                 };
 
@@ -416,6 +418,15 @@ impl Pinger {
                         in_progress.store(false, std::sync::atomic::Ordering::Relaxed);
                     }
                 });
+            }
+            // Check complete tasks here.. it's possible we never even got to running
+            debug!(
+                "Count at end: {}",
+                complete_tasks.load(std::sync::atomic::Ordering::SeqCst)
+            );
+            if complete_tasks.load(std::sync::atomic::Ordering::SeqCst) == 18 {
+                trace!("All pings failed, marking as complete for now.");
+                self_in_progress.store(false, std::sync::atomic::Ordering::SeqCst);
             }
         });
     }
