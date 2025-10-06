@@ -4,10 +4,6 @@ use regex::bytes::Regex;
 use std::{
     io::{self},
     net::ToSocketAddrs,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicI8},
-    },
     task::Poll,
     thread::{self, JoinHandle},
     time::Duration,
@@ -331,7 +327,7 @@ impl Decoder for TelnetPromptDecoder {
 pub struct Pinger {
     client: surge_ping::Client,
     response: mpsc::UnboundedSender<(String, bool)>,
-    in_progress: Arc<AtomicBool>,
+    sequence_number: u16,
 }
 
 impl Pinger {
@@ -339,95 +335,61 @@ impl Pinger {
         Ok(Self {
             client: surge_ping::Client::new(&Config::default())?,
             response: reply_to,
-            in_progress: Arc::new(AtomicBool::new(false)),
+            sequence_number: 0,
         })
     }
-    pub fn ping(&self) {
-        if self
-            .in_progress
-            .compare_exchange(
-                false,
-                true,
-                std::sync::atomic::Ordering::Acquire,
-                std::sync::atomic::Ordering::Relaxed,
-            )
-            .is_err()
-        {
-            trace!("Asked to ping while in progress; ignoring");
-            return;
-        }
-        let complete_tasks = Arc::new(AtomicI8::new(0));
+    pub fn ping(&mut self) {
         let response = self.response.clone();
-        let self_in_progress = self.in_progress.clone();
         let client = self.client.clone();
+        let next_ping_number = self.sequence_number;
+        self.sequence_number += 1;
         tokio::spawn(async move {
+            trace!("Starting ping {next_ping_number}");
+
             for i in 0..18 {
                 let sender = response.clone();
                 let hostname = format!("i24-jf9mb-{:02}.diamond.ac.uk", i);
                 let Ok(mut ip) = tokio::net::lookup_host(format!("{hostname}:0")).await else {
                     trace!("Could not resove host {hostname}");
                     let _ = sender.send((hostname.clone(), false));
-                    complete_tasks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     continue;
                 };
                 let Some(ip) = ip.next().map(|v| v.ip()) else {
                     trace!("Could not resove single IPv4 for {hostname}");
                     let _ = sender.send((hostname, false));
-                    complete_tasks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     continue;
                 };
 
                 let client = client.clone();
-                let count = complete_tasks.clone();
-                let in_progress = self_in_progress.clone();
                 tokio::spawn(async move {
                     let payload = [0; 56];
                     // let mut pingid = client.pinger(ip, PingIdentifier(0));
                     let mut results = Vec::new();
                     let mut pinger = client.pinger(ip, PingIdentifier(0)).await;
                     pinger.timeout(Duration::from_secs(1));
-                    for idx in 0..5 {
-                        match pinger.ping(PingSequence(idx), &payload).await {
-                            Ok((IcmpPacket::V4(p), d)) => {
-                                trace!(
-                                    "PING: {} bytes from {} ({}): icmp_seq={} ttl={:?} time={:.3?} ms",
-                                    p.get_size(),
-                                    hostname,
-                                    p.get_source(),
-                                    p.get_sequence(),
-                                    p.get_ttl(),
-                                    d
-                                );
-                                results.push(d);
-                                let _ = sender.send((hostname.clone(), true));
-                            }
-                            Err(e) => {
-                                trace!("PING: From {hostname} ({ip}): {e}");
-                                let _ = sender.send((hostname.clone(), false));
-                            }
-                            p => {
-                                warn!("Unexpected ping response: {p:?}");
-                            }
+                    match pinger.ping(PingSequence(next_ping_number), &payload).await {
+                        Ok((IcmpPacket::V4(p), d)) => {
+                            trace!(
+                                "PING: {} bytes from {} ({}): icmp_seq={} ttl={:?} time={:.3?} ms",
+                                p.get_size(),
+                                hostname,
+                                p.get_source(),
+                                p.get_sequence(),
+                                p.get_ttl(),
+                                d
+                            );
+                            results.push(d);
+                            let _ = sender.send((hostname.clone(), true));
                         }
-                        tokio::time::sleep(Duration::from_secs(1)).await;
-                    }
-                    // Now done, send success if 3/5 succeeded
-                    let _ = sender.send((hostname, results.len() >= 3));
-                    let complete = count.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    if complete == 18 {
-                        trace!("All pings complete, setting in-progress marker");
-                        in_progress.store(false, std::sync::atomic::Ordering::Relaxed);
+                        Err(e) => {
+                            trace!("PING: From {hostname} ({ip}): {e}");
+                            let _ = sender.send((hostname.clone(), false));
+                        }
+                        p => {
+                            warn!("Unexpected ping response: {p:?}");
+                        }
                     }
                 });
-            }
-            // Check complete tasks here.. it's possible we never even got to running
-            trace!(
-                "Count at end: {}",
-                complete_tasks.load(std::sync::atomic::Ordering::SeqCst)
-            );
-            if complete_tasks.load(std::sync::atomic::Ordering::SeqCst) == 18 {
-                trace!("All pings failed, marking as complete for now.");
-                self_in_progress.store(false, std::sync::atomic::Ordering::SeqCst);
             }
         });
     }

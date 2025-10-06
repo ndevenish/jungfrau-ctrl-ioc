@@ -13,7 +13,7 @@ use std::{
 };
 use tokio::{select, sync::mpsc};
 use tokio_util::codec::FramedRead;
-use tracing::{debug, info, warn};
+use tracing::{debug, info, trace, warn};
 use tracing_subscriber::EnvFilter;
 
 /// Retrieve the power state e.g. are the front-end boards powered
@@ -87,7 +87,7 @@ struct Args {
     prefix: String,
 }
 
-#[tokio::main(flavor = "current_thread")]
+#[tokio::main]
 async fn main() {
     let opts = Args::parse();
     let prefix = opts.prefix;
@@ -153,7 +153,7 @@ async fn main() {
     // Don't start the server until we have the first value
     let mut server = None;
     let (ping_tx, mut ping_rx) = mpsc::unbounded_channel();
-    let pinger = Pinger::new(ping_tx).ok();
+    let mut pinger = Pinger::new(ping_tx).ok();
     if pinger.is_none() {
         warn!("Could not open datagram socket for ping: Will not monitor FEB state");
     }
@@ -214,7 +214,8 @@ async fn main() {
                 },
                 _ = tokio::time::sleep_until((last_ping + Duration::from_secs(5)).into()) => {
                     last_ping = Instant::now();
-                    if let Some(ref pinger) = pinger {
+                    if let Some(ref mut pinger) = pinger {
+                        trace!("Pinging");
                         pinger.ping();
                     }
                 },
@@ -241,11 +242,15 @@ async fn main() {
                                 debug!("Switch switched to OFF, turning off detector ROB");
                                 pv_state.store("Powering down".to_string());
                                 let _ = switch_power(&mut reader, desired_state).await;
+                                // Force a re-ping now
+                                last_ping = Instant::now() - Duration::from_secs(100);
                             },
                             (false, true) => {
                                 debug!("Switch switched to ON, turning on detector ROB");
                                 pv_state.store("Powering up".to_string());
                                 let _ = switch_power(&mut reader, desired_state).await;
+                                // Force a re-ping now
+                                last_ping = Instant::now() - Duration::from_secs(100);
                             },
                             _ => {}, // It already matches
                         };
