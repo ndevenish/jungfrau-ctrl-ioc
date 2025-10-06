@@ -223,7 +223,9 @@ async fn main() {
                         warn!("Got ping result for unknown module {hostname}");
                         continue;
                     };
-                    module.store(success);
+                    if module.load() != success {
+                        module.store(success);
+                    }
                 },
                 _ = reader.get_ref().disconnected() => break,
                 _ = tokio::signal::ctrl_c() => {
