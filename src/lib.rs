@@ -363,8 +363,8 @@ impl Pinger {
         tokio::spawn(async move {
             for i in 0..18 {
                 let sender = response.clone();
-                let hostname = format!("i24-jf9mb-{:02}", i);
-                let Ok(mut ip) = tokio::net::lookup_host(hostname.clone()).await else {
+                let hostname = format!("i24-jf9mb-{:02}.diamond.ac.uk", i);
+                let Ok(mut ip) = tokio::net::lookup_host(format!("{hostname}:0")).await else {
                     trace!("Could not resove host {hostname}");
                     let _ = sender.send((hostname.clone(), false));
                     complete_tasks.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -398,10 +398,12 @@ impl Pinger {
                                     p.get_ttl(),
                                     d
                                 );
-                                results.push(d)
+                                results.push(d);
+                                let _ = sender.send((hostname.clone(), true));
                             }
                             Err(e) => {
                                 trace!("PING: From {hostname} ({ip}): {e}");
+                                let _ = sender.send((hostname.clone(), false));
                             }
                             p => {
                                 warn!("Unexpected ping response: {p:?}");

@@ -140,7 +140,7 @@ async fn main() {
     let submodules: HashMap<_, _> = (0..18)
         .map(|i| {
             (
-                format!("i24-jf9mb-{:02}", i),
+                format!("i24-jf9mb-{:02}.diamond.ac.uk", i),
                 library
                     .build_pv(&format!("{prefix}BOARD{i:02}:STATE"), false)
                     .read_only(true)
@@ -212,7 +212,7 @@ async fn main() {
                         server = Some(ServerBuilder::new(library.clone()).start().await.unwrap());
                     }
                 },
-                _ = tokio::time::sleep_until((last_ping + Duration::from_secs(10)).into()) => {
+                _ = tokio::time::sleep_until((last_ping + Duration::from_secs(5)).into()) => {
                     last_ping = Instant::now();
                     if let Some(ref pinger) = pinger {
                         pinger.ping();
