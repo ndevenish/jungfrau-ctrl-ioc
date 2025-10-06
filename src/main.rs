@@ -6,9 +6,12 @@ use epicars::{
     providers::{IntercomProvider, intercom::ConverterRecvError},
 };
 use futures_util::stream::StreamExt;
-use jungfrau_ctrl_ioc::{AsyncTelnet, TelnetPromptDecoder};
-use std::time::{Duration, Instant};
-use tokio::select;
+use jungfrau_ctrl_ioc::{AsyncTelnet, Pinger, TelnetPromptDecoder};
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
+use tokio::{select, sync::mpsc};
 use tokio_util::codec::FramedRead;
 use tracing::{debug, info, warn};
 use tracing_subscriber::EnvFilter;
@@ -128,16 +131,29 @@ async fn main() {
         .build()
         .unwrap();
     let pv_state = library
-        .build_pv(&format!("{prefix}STATE"), String::new())
+        .build_pv(&format!("{prefix}STATUS"), String::new())
         .minimum_length(32)
         .read_only(true)
         .build()
         .unwrap();
-
+    // Build PV for each submodule up
+    let submodules: HashMap<_, _> = (0..18)
+        .map(|i| {
+            (
+                format!("i24-jf9mb-{:02}", i),
+                library
+                    .build_pv(&format!("{prefix}BOARD{i:02}:STATE"), false)
+                    .read_only(true)
+                    .build()
+                    .unwrap(),
+            )
+        })
+        .collect();
     let mut switch_watch = pv_switch.subscribe();
     // Don't start the server until we have the first value
     let mut server = None;
-
+    let (ping_tx, mut ping_rx) = mpsc::unbounded_channel();
+    let pinger = Pinger::new(ping_tx);
     '_outer: loop {
         pv_state.store("Disconnected".to_string());
         let connection = match AsyncTelnet::connect("i24-jf9mb-ctrl:23").await {
@@ -158,6 +174,7 @@ async fn main() {
 
         // The last time we queried an update
         let mut last_requested_update = Instant::now() - Duration::from_secs(60);
+        let mut last_ping = last_requested_update;
         // The main loop, most time should be spent in here
         loop {
             pv_state.store("Ready".to_string());
@@ -191,6 +208,17 @@ async fn main() {
                     if server.is_none() {
                         server = Some(ServerBuilder::new(library.clone()).start().await.unwrap());
                     }
+                },
+                _ = tokio::time::sleep_until((last_ping + Duration::from_secs(10)).into()) => {
+                    last_ping = Instant::now();
+                    pinger.ping();
+                },
+                Some((hostname, success)) = ping_rx.recv() => {
+                    let Some(module) = submodules.get(&hostname) else {
+                        warn!("Got ping result for unknown module {hostname}");
+                        continue;
+                    };
+                    module.store(success);
                 },
                 _ = reader.get_ref().disconnected() => break,
                 _ = tokio::signal::ctrl_c() => {
