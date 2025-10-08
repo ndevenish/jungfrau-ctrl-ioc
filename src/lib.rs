@@ -44,7 +44,7 @@ impl AsyncTelnet {
             AsyncTelnetInternal::start(addr, cancel_sub, data_tx, req_rx, conn_tx, dc)
         });
         // Wait for the connection to succeed or fail
-        let _ = conn_rx.await?;
+        conn_rx.await??;
         Ok(AsyncTelnet {
             thread: Some(thread),
             cancel,
