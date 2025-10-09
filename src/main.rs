@@ -3,10 +3,14 @@ use anyhow::{Result, anyhow};
 use clap::Parser;
 use epicars::{
     ServerBuilder,
-    providers::{IntercomProvider, intercom::ConverterRecvError},
+    providers::{
+        IntercomProvider,
+        intercom::{ConverterRecvError, Intercom},
+    },
 };
 use futures_util::stream::StreamExt;
 use jungfrau_ctrl_ioc::{AsyncTelnet, Pinger, TelnetPromptDecoder};
+use regex::Regex;
 use std::{
     collections::HashMap,
     time::{Duration, Instant},
@@ -30,7 +34,72 @@ async fn query_power_state(
         .ok_or(anyhow!("Got closed connection"))??;
     Ok(str::from_utf8(&data)?.trim().parse::<i16>()? == 1i16)
 }
+#[derive(Default, Debug)]
+struct Psu<T> {
+    voltage: T,
+    current: T,
+    temperature: T,
+}
 
+async fn get_psu_status(
+    reader: &mut FramedRead<AsyncTelnet, TelnetPromptDecoder>,
+) -> Result<HashMap<u8, Psu<Option<f32>>>> {
+    let command = concat!(
+        r#"find /power_control/hwmon/ -follow -maxdepth 2 -path "*/ps*/*_input" -exec printf '{} ' \; -exec cat {} \;"#,
+        "; echo $?\n"
+    );
+    debug!("Issuing '{}'", command.trim());
+    reader.get_ref().send(command.as_bytes()).await?;
+    let data = reader
+        .next()
+        .await
+        .ok_or(anyhow!("Got closed connection"))??;
+
+    let response = str::from_utf8(&data)?;
+    // let lines: Vec<_> =
+
+    let mut psus = HashMap::new();
+    let line_re = Regex::new(r#"^.*/ps(\d)/(.+)_input$"#).unwrap();
+    // Parse each response
+    let lines: Vec<_> = response.lines().collect();
+    let status: i32 = lines[lines.len() - 1].parse()?;
+    if status != 0 {
+        return Err(anyhow!("Got nonzero return status: {status}"));
+    }
+    for line in lines[..lines.len() - 1].iter() {
+        trace!("Handling line {line}");
+        let Some((path, read_value)) = line.split_once(" ") else {
+            warn!("Got line response from PSU status didn't understand: {line}");
+            continue;
+        };
+        trace!("     Handling value: {read_value} path: {path}");
+        // Parse the path
+        let Some(capture) = line_re.captures(path) else {
+            warn!("Could not parse path part in psu response: '{line}'");
+            continue;
+        };
+        let (_, [psu_name, kind]) = capture.extract();
+        let Ok(psu_number) = psu_name.parse::<u8>() else {
+            warn!("Could not parse PSU name '{psu_name}' as integer");
+            continue;
+        };
+        let psu: &mut Psu<Option<f32>> = psus.entry(psu_number).or_default();
+        let Ok(value) = read_value.parse::<f32>() else {
+            warn!("Could not read value {read_value}");
+            continue;
+        };
+        match kind {
+            "temp" => psu.temperature = Some(value / 1000.0),
+            "curr" => psu.current = Some(value / 1000.0),
+            "volt" => psu.voltage = Some(value / 1000.0),
+            _ => {
+                warn!("Unrecognised entry: {kind}");
+                continue;
+            }
+        }
+    }
+    Ok(psus)
+}
 /// Toggle the FEB power to a desired state
 async fn switch_power(
     reader: &mut FramedRead<AsyncTelnet, TelnetPromptDecoder>,
@@ -136,6 +205,29 @@ async fn main() {
         .read_only(true)
         .build()
         .unwrap();
+    let mut psu_states: HashMap<u8, Psu<Intercom<f32>>> = HashMap::new();
+    for psuid in 0..=1 {
+        psu_states.insert(
+            psuid,
+            Psu {
+                voltage: library
+                    .build_pv(&format!("{prefix}:PSU{psuid}:VOLT"), 0f32)
+                    .read_only(true)
+                    .build()
+                    .unwrap(),
+                current: library
+                    .build_pv(&format!("{prefix}:PSU{psuid}:CURR"), 0f32)
+                    .read_only(true)
+                    .build()
+                    .unwrap(),
+                temperature: library
+                    .build_pv(&format!("{prefix}:PSU{psuid}:TEMP"), 0f32)
+                    .read_only(true)
+                    .build()
+                    .unwrap(),
+            },
+        );
+    }
     // Build PV for each submodule up
     let submodules: HashMap<_, _> = (0..18)
         .map(|i| {
@@ -173,8 +265,6 @@ async fn main() {
         debug!("Discarding initial frame");
         let _ = reader.next().await.unwrap().unwrap();
 
-        // Scrape info
-
         // The last time we queried an update
         let mut last_requested_update = Instant::now() - Duration::from_secs(60);
         let mut last_ping = last_requested_update;
@@ -203,6 +293,28 @@ async fn main() {
                         warn!("Could not read power state");
                         "-----".to_string()
                     };
+                    if let Ok(psus) = get_psu_status(&mut reader).await {
+                        // println!("PSU states: {psu_states:?}");
+                        for (psu_num, state) in psus {
+                            let Some(psu) = psu_states.get(&psu_num) else {
+                                warn!("Got PSU state for unrecognised PSU: {psu_num}");
+                                continue;
+                            };
+                            if let Some(curr) = state.current {
+                                psu.current.store(curr);
+                            };
+                            if let Some(volt) = state.voltage {
+                                psu.voltage.store(volt);
+                            };
+                            if let Some(temp) = state.temperature {
+                                psu.temperature.store(temp);
+                            };
+                        }
+                    } else {
+                        warn!("Could not read PSU status");
+                    }
+
+                    // Build the PSU status line
 
                     info!("SHT33 Temperature: {temperature:-.2}°C   Humidity: {humidity:2.1} %   Power: {state}",);
 
