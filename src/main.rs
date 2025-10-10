@@ -211,17 +211,17 @@ async fn main() {
             psuid,
             Psu {
                 voltage: library
-                    .build_pv(&format!("{prefix}:PSU{psuid}:VOLT"), 0f32)
+                    .build_pv(&format!("{prefix}PSU{psuid}:VOLT"), 0f32)
                     .read_only(true)
                     .build()
                     .unwrap(),
                 current: library
-                    .build_pv(&format!("{prefix}:PSU{psuid}:CURR"), 0f32)
+                    .build_pv(&format!("{prefix}PSU{psuid}:CURR"), 0f32)
                     .read_only(true)
                     .build()
                     .unwrap(),
                 temperature: library
-                    .build_pv(&format!("{prefix}:PSU{psuid}:TEMP"), 0f32)
+                    .build_pv(&format!("{prefix}PSU{psuid}:TEMP"), 0f32)
                     .read_only(true)
                     .build()
                     .unwrap(),
