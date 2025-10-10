@@ -262,6 +262,8 @@ async fn main() {
         pv_connected.store(true);
         pv_state.store("Connected".to_string());
         let mut reader = FramedRead::new(connection, TelnetPromptDecoder {});
+        // Small delay to try and avoid echo on/off race condition
+        tokio::time::sleep(Duration::from_millis(200)).await;
         debug!("Discarding initial frame");
         let _ = reader.next().await.unwrap().unwrap();
 
