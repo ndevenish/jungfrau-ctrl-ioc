@@ -48,7 +48,7 @@ async fn get_psu_status(
         r#"find /power_control/hwmon/ -follow -maxdepth 2 -path "*/ps*/*_input" -exec printf '{} ' \; -exec cat {} \;"#,
         "; echo $?\n"
     );
-    debug!("Issuing '{}'", command.trim());
+    trace!("Issuing '{}'", command.trim());
     reader.get_ref().send(command.as_bytes()).await?;
     let data = reader
         .next()
